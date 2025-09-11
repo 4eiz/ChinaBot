@@ -1,0 +1,63 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtualenv / venv
+venv/
+ENV/
+env/
+.venv/
+pip-wheel-metadata/
+
+# compiled extensions
+*.so
+*.pyd
+*.dll
+
+# --- IDE / Editors ---
+.idea/
+.vscode/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# --- OS trash ---
+.DS_Store
+Thumbs.db
+
+# --- Logs & temp ---
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.orig
+
+# --- Project specific ---
+# uploads, exports, cache
+/media/
+exports/
+temp/
+tmp/
+__exports__/
+
+# Excel/PDF временные файлы
+*.xlsx
+*.xlsm
+*.xlsb
+*.pdf
+
+# --- Config ---
+# личные токены, ключи, env-файлы
+.env
+*.env
+*.ini
+*.local
+*.cfg
+
+# --- Coverage / tests ---
+.coverage
+.tox/
+.pytest_cache/
+htmlcov/
