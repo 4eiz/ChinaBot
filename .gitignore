@@ -36,17 +36,16 @@ Thumbs.db
 
 # --- Project specific ---
 # uploads, exports, cache
-/media/
 exports/
 temp/
 tmp/
 __exports__/
 
 # Excel/PDF временные файлы
-*.xlsx
-*.xlsm
-*.xlsb
-*.pdf
+# *.xlsx
+# *.xlsm
+# *.xlsb
+# *.pdf
 
 # --- Config ---
 # личные токены, ключи, env-файлы
