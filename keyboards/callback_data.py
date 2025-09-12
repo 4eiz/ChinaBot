@@ -5,7 +5,7 @@ from aiogram.filters.callback_data import CallbackData
 # --------------------- client.py ---------------------
 
 class MenuCallback(CallbackData, prefix="menu"):
-    menu: str
+    action: str
 
 # --------------------- form.py ---------------------
 

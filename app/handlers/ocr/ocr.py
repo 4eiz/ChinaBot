@@ -21,6 +21,14 @@ from app.handlers.services.recognition import RecognitionClient
 from database import CargoService
 
 
+TARIFF_PRIORITY = {
+    "household": 1,   # хозтовары — самый дешёвый
+    "shoes": 2,       # обувь — средний
+    "clothes": 3,     # одежда — самый дорогой
+}
+
+
+
 class OCRHandler:
     """
     Скриншот → распознавание → отчёт (кандидаты) → правки →
@@ -59,6 +67,10 @@ class OCRHandler:
     # --------------------------- Приём фото ---------------------------
 
     async def on_photo(self, message: Message, state: FSMContext):
+        """
+        Принимает фото и возвращает предположения
+        """
+
         current = await state.get_state()
         if current in (OCRState.awaiting_product_photo.state, OCRState.waiting_instruction.state):
             await self._handle_product_photo(message=message, state=state)
@@ -112,6 +124,10 @@ class OCRHandler:
     # --------------------------- Правки ---------------------------
 
     async def on_edit_field(self, call: CallbackQuery, callback_data: OCREditFieldCallback, state: FSMContext):
+        """
+        Основаня функция отображения товара во время редактирования
+        """
+
         field = callback_data.field  # price|quantity|color|size|title
         await state.update_data(current_field=field)
 
@@ -126,14 +142,19 @@ class OCRHandler:
         text = (
             f"✍️ Введите {readable}.\n\n"
             "<blockquote>Можно вставить один из вариантов из отчёта выше или ввести свой.\n"
-            "Используйте только если ИИ распознал значения неправильно!</blockquote>"
+            "⚠️ Используйте только если ИИ распознал значения неправильно!</blockquote>"
         )
+
         kb = OCRKB.back_to_edit()
         await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
         await state.set_state(OCRState.awaiting_value)
         await call.answer()
 
     async def on_new_value(self, message: Message, state: FSMContext):
+        """
+        Изменение значения товара
+        """
+
         data = await state.get_data()
         field = data.get("current_field")
         if not field:
@@ -191,7 +212,10 @@ class OCRHandler:
             return
 
         if action == "back_to_edit":
-            text = self._render_report_with_candidates(ocr=data.get("ocr", {}), header="🔎 Текущие данные:")
+            ocr = data.get("ocr", {})
+            header = "<b>🔎 Текущие данные:</b>"
+
+            text = self._render_report_with_candidates(ocr=ocr, header=header)
             kb = OCRKB.edit_menu()
             await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
             await state.set_state(OCRState.editing)
@@ -199,32 +223,67 @@ class OCRHandler:
             return
 
         if action == "back_after_link":
-            text = "📝 Укажите <b>наименование товара</b> (например: футболка, наушники, лего)."
-            kb = OCRKB.back_to_edit()
+            text = "<b>📝 Укажите наименование товара</b> (например: <code>футболка</code>, <code>наушники</code>, <code>лего</code>)"
+            back = "next_to_instruction"
+            kb = OCRKB.back_to_edit(back=back)
             await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
             await state.set_state(OCRState.awaiting_title)
             await call.answer()
             return
 
         if action == "back_after_type":
-            text = "🔗 Пришлите <b>ссылку на товар</b>.\n<i>Можно пропустить, отправив «-».</i>"
-            kb = OCRKB.back_to_edit()
+            text = "<b>🔗 Пришлите ссылку на товар</b>"
+            back = "back_after_link"
+            kb = OCRKB.back_to_edit(back=back)
             await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
             await state.set_state(OCRState.awaiting_link)
             await call.answer()
             return
 
         if action == "back_after_scope":
-            text = "🧰 Выберите <b>тип товара</b>:"
+            text = "<b>🧰 Выберите тип товара:</b>"
             kb = OCRKB.type_menu()
             await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
             await state.set_state(OCRState.choosing_type)
             await call.answer()
             return
+        
+        if action == "confirm_upgrade":
+            # апгрейдим тип посылки и идём к превью
+            data = await state.get_data()
+            cargo_id = int(data.get("cargo_id"))
+            item_code = data.get("item_type_code")
+
+            # получить id типа по коду
+            new_type_id = await self.cargo_service.cargo_types.get_id_by_code(code=item_code)
+            if new_type_id:
+                await self.cargo_service.cargos.set_cargo_type(cargo_id=cargo_id, cargo_type_id=int(new_type_id))
+
+            await self._show_final_preview(chat_id=call.message.chat.id, state=state)
+            await state.set_state(OCRState.final_confirm)
+            await call.answer()
+            return
+
+        if action == "confirm_add_cheaper":
+            # ничего не меняем, просто продолжаем
+            await self._show_final_preview(chat_id=call.message.chat.id, state=state)
+            await state.set_state(OCRState.final_confirm)
+            await call.answer()
+            return
+
+        if action == "cancel_mismatch":
+            # вернём пользователя к выбору типа товара
+            kb = OCRKB.type_menu()
+            await self._replace_message(call.message.chat.id, state, text="<b>🧰 Выберите тип товара</b>:", reply_markup=kb)
+            await state.set_state(OCRState.choosing_type)
+            await call.answer()
+            return
+
 
         if action == "confirm_final":
             if not self.cargo_service:
-                await self._replace_message(call.message.chat.id, state, text="❗️Сервис грузов не инициализирован.", reply_markup=None)
+                text = "❗️Сервис грузов не инициализирован."
+                await self._replace_message(call.message.chat.id, state, text=text, reply_markup=None)
                 await call.answer()
                 return
 
@@ -273,7 +332,10 @@ class OCRHandler:
                     extra=extra,
                 )
 
-            await self._replace_message(call.message.chat.id, state, text="✅ Товар сохранён.", reply_markup=None)
+            text = ("<b>✅ Товар сохранён</b>\n"
+                    "<i>Пропишите команду</i> /start"
+                )
+            await self._replace_message(call.message.chat.id, state, text=text, reply_markup=None)
             await state.clear()
             await call.answer()
             return
@@ -309,8 +371,9 @@ class OCRHandler:
         await state.update_data(product_photo_file_id=file_id)
         await message.delete()
 
-        text = "📝 Укажите <b>наименование товара</b> (например: футболка, наушники, лего)."
-        kb = OCRKB.back_to_edit()
+        text = "<b>📝 Укажите наименование товара</b> (например: <code>футболка</code>, <code>наушники</code>, <code>лего</code>)"
+        back = "next_to_instruction"
+        kb = OCRKB.back_to_edit(back=back)
         await self._replace_message(message.chat.id, state, text=text, reply_markup=kb)
         await state.set_state(OCRState.awaiting_title)
 
@@ -321,8 +384,9 @@ class OCRHandler:
         title = message.text.strip()
         await state.update_data(title=title)
 
-        text = "🔗 Пришлите <b>ссылку на товар</b>.\n<i>Можно пропустить, отправив «-».</i>"
-        kb = OCRKB.back_to_edit()
+        text = "<b>🔗 Пришлите ссылку на товар</b>"
+        back = "back_after_link"
+        kb = OCRKB.back_to_edit(back=back)
         await self._replace_message(message.chat.id, state, text=text, reply_markup=kb)
         await state.set_state(OCRState.awaiting_link)
 
@@ -333,7 +397,7 @@ class OCRHandler:
             link = None
         await state.update_data(source_url=link)
 
-        text = "🧰 Выберите <b>тип товара</b>:"
+        text = "<b>🧰 Выберите тип товара</b>:"
         kb = OCRKB.type_menu()
         await self._replace_message(message.chat.id, state, text=text, reply_markup=kb)
         await state.set_state(OCRState.choosing_type)
@@ -343,7 +407,7 @@ class OCRHandler:
     async def on_choose_type(self, call: CallbackQuery, callback_data: OCRTypeCallback, state: FSMContext):
         await state.update_data(item_type_code=callback_data.code)
 
-        text = "📦 Выберите <b>тип посылки</b>: общая или личная."
+        text = "<b>📦 Выберите тип посылки</b>: <code>общая</code> или <code>личная</code>"
         kb = OCRKB.scope_menu()
         await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
         await state.set_state(OCRState.choosing_scope)
@@ -387,9 +451,65 @@ class OCRHandler:
 
     async def on_choose_personal_cargo(self, call: CallbackQuery, callback_data: OCRPersonalCargoCallback, state: FSMContext):
         await state.update_data(cargo_id=int(callback_data.cargo_id))
+
+        data = await state.get_data()
+        item_code = data.get("item_type_code")  # clothes|shoes|household
+        cargo_id = int(callback_data.cargo_id)
+
+        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
+        if not cargo:
+            await self._replace_message(call.message.chat.id, state, text="❌ Посылка не найдена.", reply_markup=None)
+            await call.answer()
+            return
+
+        cargo_code = await self._cargo_type_code(cargo["cargo_type_id"])  # code
+        if not item_code or not cargo_code:
+            # если что-то не выбрано — идём дальше (старое поведение)
+            await self._show_final_preview(chat_id=call.message.chat.id, state=state)
+            await state.set_state(OCRState.final_confirm)
+            await call.answer()
+            return
+
+        item_pri  = TARIFF_PRIORITY.get(item_code, 0)
+        cargo_pri = TARIFF_PRIORITY.get(cargo_code, 0)
+
+        # 1) Товар дороже текущего тарифа посылки → предупредить, что тариф вырастет и будет изменён
+        if item_pri > cargo_pri:
+            text = (
+                "⚠️ <b>Тип вашего товара дороже текущего тарифа посылки.</b>\n\n"
+                f"🧰 Товар: <b>{self._human_item_type(item_code)}</b>\n"
+                f"📦 Посылка сейчас: <b>{self._human_item_type(cargo_code)}</b>\n\n"
+                "Если продолжите, <b>стоимость доставки за кг увеличится</b>, и тип посылки будет изменён на более дорогой.\n\n"
+                "Продолжить?"
+            )
+            await self._replace_message(call.message.chat.id, state, text=text, reply_markup=OCRKB.mismatch_upgrade())
+            await call.answer()
+            return
+
+        # 2) Товар дешевле тарифа посылки → предупредить про возможную переплату для тяжёлых товаров
+        if item_pri < cargo_pri:
+            text = (
+                "ℹ️ <b>Товар дешевле текущего тарифа посылки.</b>\n\n"
+                f"🧰 Товар: <b>{self._human_item_type(item_code)}</b>\n"
+                f"📦 Посылка: <b>{self._human_item_type(cargo_code)}</b>\n\n"
+                "Посылка считается по <b>максимальному тарифу внутри</b>. Если товар тяжёлый, вы <b>переплатите за доставку</b>.\n"
+                "Рекомендуем для тяжёлых хозтоваров создавать отдельную посылку.\n\n"
+                "Всё равно добавить этот товар в текущую посылку?"
+            )
+            await self._replace_message(call.message.chat.id, state, text=text, reply_markup=OCRKB.mismatch_cheaper())
+            await call.answer()
+            return
+
+        # 3) Равны → просто вперёд
         await self._show_final_preview(chat_id=call.message.chat.id, state=state)
         await state.set_state(OCRState.final_confirm)
         await call.answer()
+
+
+    def _human_item_type(self, code: str) -> str:
+        return {"clothes":"Одежда","shoes":"Обувь","household":"Хозтовары"}.get(code, code or "—")
+
+
 
     # --------------------------- Превью/вывод ---------------------------
 
@@ -531,3 +651,8 @@ class OCRHandler:
             f"{photo_note}\n\n"
             "Нажмите «➕ Добавить» для подтверждения или «❌ Отмена»."
         )
+
+
+    async def _cargo_type_code(self, cargo_type_id: int) -> str | None:
+        row = await self.cargo_service.cargo_types.get(cargo_type_id=cargo_type_id)
+        return (row or {}).get("code")

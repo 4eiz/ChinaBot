@@ -1,7 +1,7 @@
 from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
-from .callback_data import OCREditFieldCallback, OCRFlowCallback, OCRTypeCallback, OCRPersonalCargoCallback, OCRScopeCallback
+from .callback_data import OCREditFieldCallback, OCRFlowCallback, OCRTypeCallback, OCRPersonalCargoCallback, OCRScopeCallback, ProfileFlowCallback
 
 
 
@@ -19,9 +19,9 @@ class OCRKB:
         return b.as_markup()
 
     @staticmethod
-    def back_to_edit() -> InlineKeyboardMarkup:
+    def back_to_edit(back="back_to_edit") -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
-        b.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_to_edit").pack())
+        b.button(text="⬅ Назад", callback_data=OCRFlowCallback(action=f"{back}").pack())
         return b.as_markup()
 
     @staticmethod
@@ -35,7 +35,7 @@ class OCRKB:
     def final_actions() -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
         b.button(text="➕ Добавить", callback_data=OCRFlowCallback(action="confirm_final").pack())
-        b.button(text="❌ Отмена", callback_data=OCRFlowCallback(action="cancel_final").pack())
+        b.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_scope").pack())
         b.adjust(2)
         return b.as_markup()
 
@@ -53,7 +53,7 @@ class OCRKB:
         builder.button(text="🧥 Одежда", callback_data=OCRTypeCallback(code="clothes").pack())
         builder.button(text="👟 Обувь", callback_data=OCRTypeCallback(code="shoes").pack())
         builder.button(text="🧼 Хозтовары", callback_data=OCRTypeCallback(code="household").pack())
-        builder.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_link").pack())
+        builder.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_type").pack())
         builder.adjust(1, 1, 1, 1)
         return builder.as_markup()
 
@@ -62,7 +62,7 @@ class OCRKB:
         builder = InlineKeyboardBuilder()
         builder.button(text="🤝 Общая посылка", callback_data=OCRScopeCallback(scope="shared").pack())
         builder.button(text="👤 Личная посылка", callback_data=OCRScopeCallback(scope="personal").pack())
-        builder.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_type").pack())
+        builder.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_scope").pack())
         builder.adjust(1, 1, 1)
         return builder.as_markup()
 
@@ -73,6 +73,27 @@ class OCRKB:
             for c in cargos:
                 title = c.get("title") or f"Посылка #{c['id']}"
                 builder.button(text=f"📦 {title}", callback_data=OCRPersonalCargoCallback(cargo_id=c["id"]).pack())
+        else:
+            builder.button(text="👤 Профиль", callback_data=ProfileFlowCallback(action="profile").pack())
+
+
         builder.button(text="⬅ Назад", callback_data=OCRFlowCallback(action="back_after_scope").pack())
         builder.adjust(1)
         return builder.as_markup()
+    
+
+    @staticmethod
+    def mismatch_upgrade() -> InlineKeyboardMarkup:
+        b = InlineKeyboardBuilder()
+        b.button(text="🔼 Продолжить и изменить тариф", callback_data=OCRFlowCallback(action="confirm_upgrade").pack())
+        b.button(text="❌ Отмена", callback_data=OCRFlowCallback(action="cancel_mismatch").pack())
+        b.adjust(1, 1)
+        return b.as_markup()
+
+    @staticmethod
+    def mismatch_cheaper() -> InlineKeyboardMarkup:
+        b = InlineKeyboardBuilder()
+        b.button(text="➕ Добавить (понимаю риски)", callback_data=OCRFlowCallback(action="confirm_add_cheaper").pack())
+        b.button(text="❌ Отмена", callback_data=OCRFlowCallback(action="cancel_mismatch").pack())
+        b.adjust(1, 1)
+        return b.as_markup()

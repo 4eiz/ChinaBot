@@ -175,8 +175,15 @@ class ShipmentsKB:
     def send_confirm(cargo_id: int) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
         b.button(text="✅ Да, отправить", callback_data=ShipmentFlowCallback(action="send_yes", id=cargo_id).pack())
-        b.button(text="❌ Нет, вернуться", callback_data=ShipmentFlowCallback(action="send_no", id=cargo_id).pack())
+        b.button(text="❌ Нет, вернуться", callback_data=ShipmentFlowCallback(action="open", id=cargo_id).pack())
         b.adjust(2)
+        return b.as_markup()
+    
+
+    @staticmethod
+    def open_shipment(cargo_id: int) -> InlineKeyboardMarkup:
+        b = InlineKeyboardBuilder()
+        b.button(text="Открыть посылку", callback_data=ShipmentFlowCallback(action="open", id=cargo_id).pack())
         return b.as_markup()
 
 

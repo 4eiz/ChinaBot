@@ -119,15 +119,18 @@ class ShipmentsHandler:
         cargo_type_id = await self.cargo_service.cargo_types.get_id_by_code(code=data["type"])
         # print(f'ID: {cargo_type_id}')
 
-        await self.cargo_service.cargos.create(
+        data_ship = await self.cargo_service.cargos.create(
             scope="personal",
             cargo_type_id=cargo_type_id,
             owner_user_id=call.from_user.id,
             title=data["name"]
         )
         await state.clear()
+
         text = "✅ Посылка создана!"
-        await call.message.answer(text=text)
+        cargo_id = data_ship.get('id')
+        kb = ShipmentsKB.open_shipment(cargo_id=cargo_id)
+        await call.message.answer(text=text, reply_markup=kb)
 
 
     async def back_to_name(self, call: types.CallbackQuery, state: FSMContext):
@@ -365,19 +368,27 @@ class ShipmentsHandler:
         await self.list_items(call, fake_cb)
 
 
+    # ── send_request: проверка на пустую посылку ───────────────────────────────────
     async def send_request(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """
         Шаг 1: показать подтверждение перед отправкой.
         """
-
-        await call.message.delete()
-
         cargo_id = int(callback_data.id)
+
+        # 1) валидируем статус
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo or cargo.get("status") != "open":
-            text = "Эта посылка не редактируется или уже отправлена."
-            return await call.answer(text=text, show_alert=True)
+            return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
 
+        # 2) валидируем наличие товаров (не удаляем сообщение до ответа!)
+        await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)
+        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
+        items_count = int(cargo.get("items_count") or 0)
+        if items_count == 0:
+            return await call.answer("❌ Нельзя отправить пустую посылку — добавьте хотя бы один товар.", show_alert=True)
+
+        # 3) дальше всё как было
+        await call.message.delete()
         text = (
             "❗ <b>Ты уверен, что посылка собрана полностью и лишнего нет?</b>\n\n"
             "После отправки изменить состав будет <u>невозможно</u> 🚫"
@@ -386,31 +397,40 @@ class ShipmentsHandler:
         await call.message.answer(text=text, reply_markup=kb)
         await call.answer()
 
+
+    # ── send_yes: повторная проверка перед сменой статуса ──────────────────────────
     async def send_yes(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """
         Шаг 2: юзер подтвердил — переводим в pending и шлём заявку админам.
         """
-
-        await call.message.delete()
         cargo_id = int(callback_data.id)
+
+        # 1) статус «open» обязателен
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo or cargo.get("status") != "open":
-            text = "Эта посылка не редактируется или уже отправлена."
-            return await call.answer(text=text, show_alert=True)
+            return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
 
-        # актуализируем агрегаты и переводим статус
+        # 2) гарантируем актуальные агрегаты и проверяем, что не пусто
         await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)
+        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
+        items_count = int(cargo.get("items_count") or 0)
+        if items_count == 0:
+            return await call.answer("❌ Нельзя отправить пустую посылку — добавьте хотя бы один товар.", show_alert=True)
+
+        # 3) всё ок → переводим в pending
         await self.cargo_service.cargos.set_status(cargo_id=cargo_id, status="pending")
 
-        # уведомление админам
+        # 4) уведомление админам
         notifier = AdminNotifier(bot=bot, admin_chat_id=ADMIN_CHAT_ID)
         cargo_now = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         username = call.from_user.username
         await notifier.notify_new_shipment_request(cargo_service=self.cargo_service, cargo=cargo_now, username=username)
 
-        text = "✅ <b>Заявка отправлена</b>. Администратор скоро проверит посылку."
-        await call.message.answer(text=text)
+        # 5) пользователю
+        await call.message.delete()
+        await call.message.answer("✅ <b>Заявка отправлена</b>. Администратор скоро проверит посылку.")
         await call.answer()
+
 
     async def send_no(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """

@@ -215,7 +215,15 @@ class CargosDB:
             'rate_per_kg_usd': float(rate),
             'delivery_cost_usd': float(delivery_cost),
         }
-    
+
+
+    async def set_cargo_type(self, *, cargo_id: int, cargo_type_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE cargos SET cargo_type_id=$2, updated_at=NOW() WHERE id=$1",
+            cargo_id, cargo_type_id
+        )
+
+
     async def get_name_by_id(self, *, cargo_type_id: int) -> Optional[str]:
         row = await self.conn.fetchrow(
             "SELECT name FROM cargo_types WHERE id=$1",

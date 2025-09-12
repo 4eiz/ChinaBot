@@ -32,7 +32,9 @@ class AdminExports:
             legs=settle["legs"],
         )
 
-        await call.message.answer_document(document=types.FSInputFile(file_path), caption="📄 Админ-отчёт по посылке")
+        file = types.FSInputFile(file_path)
+        text = "📄 Админ-отчёт по посылке"
+        await call.message.answer_document(document=file, caption=text)
 
     async def export_items_pdf(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
         cargo_id = callback_data.id
@@ -50,4 +52,6 @@ class AdminExports:
             photos={},  # без фоток; если нужно — можно заюзать collect из AdminShipments
         )
 
-        await call.message.answer_document(document=types.FSInputFile(file_path), caption="🧾 Экспорт всех товаров")
+        file = types.FSInputFile(file_path)
+        text = "🧾 Экспорт всех товаров"
+        await call.message.answer_document(document=file, caption=text)
