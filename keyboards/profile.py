@@ -1,6 +1,6 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
-from .callback_data import ProfileFlowCallback, ShipmentFlowCallback, AdminFlowCallback
+from .callback_data import ProfileFlowCallback, ShipmentFlowCallback, AdminFlowCallback, MenuCallback
 
 
 
@@ -13,7 +13,7 @@ class ProfileKB:
         b.button(text="📦 Мои посылки", callback_data=ProfileFlowCallback(action="shipments").pack())
         if is_admin:
             b.button(text="🛠 Админ-панель", callback_data=AdminFlowCallback(action="menu").pack())
-        b.button(text="⬅ Назад", callback_data=ProfileFlowCallback(action="back").pack())
+        b.button(text="⬅ Назад", callback_data=MenuCallback(action="start_home").pack())
         b.adjust(1, 1, 1)
         return b.as_markup()
     

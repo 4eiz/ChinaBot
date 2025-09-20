@@ -1,7 +1,7 @@
 # keyboards/admin_kb.py  (или где у тебя лежит AdminKB)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
-from .callback_data import AdminFlowCallback, PaymentFlowCallback
+from .callback_data import AdminFlowCallback, PaymentFlowCallback, ProfileFlowCallback
 
 class AdminKB:
     @staticmethod
@@ -9,6 +9,8 @@ class AdminKB:
         b = InlineKeyboardBuilder()
         b.button(text="📦 Посылки", callback_data=AdminFlowCallback(action="shipments").pack())
         b.button(text="👥 Пользователи (скоро)", callback_data=AdminFlowCallback(action="users_stub").pack())
+        b.button(text="⬅ Назад", callback_data=ProfileFlowCallback(action="back_to_profile").pack())
+
         b.adjust(1, 1)
         return b.as_markup()
 

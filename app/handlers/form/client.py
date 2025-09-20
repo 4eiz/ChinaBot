@@ -182,9 +182,9 @@ class FormClientHandler:
             ),
             "user_confirm": (
                 "<b>Проверьте данные:</b>\n"
-                "👤 {name} {surname}\n"
-                "📞 {phone}\n"
-                "📡 {source}"
+                "👤 <code>{name} {surname}</code>\n"
+                "📞 Телефон: <code>{phone}</code>\n"
+                "📡 Источник: <code>{source}</code>"
             )
         }
 

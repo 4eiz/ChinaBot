@@ -205,7 +205,7 @@ class OCRHandler:
                 "<b>📸 Отправьте фото самого товара</b>\n\n"
                 "<blockquote>Если не знаете, где его взять — откройте инструкцию по кнопке ниже.</blockquote>"
             )
-            kb = OCRKB.instruction(url=config.INSTRUCTION_URL1)
+            kb = OCRKB.instruction(url=config.GUIDE_LINK)
             await self._replace_message(call.message.chat.id, state, text=text, reply_markup=kb)
             await state.set_state(OCRState.waiting_instruction)
             await call.answer()

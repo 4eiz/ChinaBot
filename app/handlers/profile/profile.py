@@ -36,11 +36,11 @@ class ProfileHandler:
 
 
         text = (
-            f"👤 <b>ID:</b> {user_id}\n"
-            f"💳 <b>Баланс:</b> {balance_usd}$\n"
-            f"💱 <b>Курс:</b> {course}\n"
-            f"📦 <b>Посылок:</b> {parcels_count}\n"
-            f"📊 <b>Потрачено:</b> {spent_total_usd}$"
+            f"👤 <b>ID:</b> <code>{user_id}</code>\n"
+            f"💳 <b>Баланс:</b> <code>{balance_usd}$</code>\n"
+            f"💱 <b>Курс:</b> <code>{course}</code>\n"
+            f"📦 <b>Посылок:</b> <code>{parcels_count}</code>\n"
+            f"📊 <b>Потрачено:</b> <code>{spent_total_usd}$</code>"
         )
         return text
 

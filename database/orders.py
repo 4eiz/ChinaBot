@@ -45,10 +45,10 @@ class CargoTypesDB:
         if exists:
             return
         defaults = [
-            ('clothes', 'Одежда', Decimal('6.00')),
+            ('clothes', 'Одежда', Decimal('7.50')),
             ('shoes', 'Обувь', Decimal('7.00')),
-            ('household', 'Хозтовары', Decimal('5.00')),
-            ('mixed', 'Смешанный', Decimal('0.00')),
+            ('household', 'Хозтовары', Decimal('6.00')),
+            ('mixed', 'Смешанный', Decimal('7.50')),
         ]
         for code, name, rate in defaults:
             await self.conn.execute(
@@ -628,8 +628,8 @@ class CargoService:
         # вызови init у всех таблиц, включая платежи
         await self.cargos.init()
         await self.items.init()
-        paydb = CargoPaymentsDB(conn=self.conn)
-        await paydb.init()
+        await self.cargo_types.init()
+        await self.pay.init()
         # инициализация прочих таблиц как у тебя
 
     async def _resolve_item_type_id(self, item_type_code: str) -> int:

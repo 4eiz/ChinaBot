@@ -59,11 +59,11 @@ API_PASSWORD = os.getenv('API_PASSWORD')
 
 # ССЫЛКИ
 INSTRUCTION_URL1 = os.getenv('INSTRUCTION_URL1')
-CHANNEL_LINK   = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
-GUIDE_LINK     = os.getenv("GUIDE_LINK", "https://t.me/your_guide_post")
-SUPPORT_TG     = os.getenv("SUPPORT_TG", "@your_support_username")
-SUPPORT_EMAIL  = os.getenv("SUPPORT_EMAIL", "support@example.com")
-SUPPORT_HOURS  = os.getenv("SUPPORT_HOURS", "Пн–Пт 10:00–19:00 (Мск)")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
+GUIDE_LINK = os.getenv("GUIDE_LINK", "https://t.me/your_guide_post")
+SUPPORT_TG = os.getenv("SUPPORT_TG", "@your_support_username")
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@example.com")
+SUPPORT_HOURS = os.getenv("SUPPORT_HOURS", "Пн–Пт 10:00–19:00 (Мск)")
 
 
 
