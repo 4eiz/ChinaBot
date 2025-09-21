@@ -1,5 +1,7 @@
+from io import BytesIO
 import os
 import tempfile
+from typing import Dict
 from aiogram import types, Router
 from aiogram import F
 from keyboards import AdminFlowCallback
@@ -44,14 +46,36 @@ class AdminExports:
         tmpdir = tempfile.gettempdir()
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_items.pdf")
 
+        photos = await self._collect_item_photos(bot=call.bot, items=items)
+
         pdf = PDFExportService()
         pdf.generate_cargo_items_pdf(
             file_path=file_path,
             cargo=cargo,
             items=items,
-            photos={},  # без фоток; если нужно — можно заюзать collect из AdminShipments
+            photos=photos,  # без фоток; если нужно — можно заюзать collect из AdminShipments
         )
 
         file = types.FSInputFile(file_path)
         text = "🧾 Экспорт всех товаров"
         await call.message.answer_document(document=file, caption=text)
+
+
+    async def _collect_item_photos(self, *, bot, items: list[dict]) -> Dict[int, bytes]:
+        """
+        Возвращает {item_id: image_bytes} для тех, где есть photo_file_id.
+        """
+        result: Dict[int, bytes] = {}
+        for it in items:
+            file_id = it.get("photo_file_id")
+            if not file_id:
+                continue
+            try:
+                file = await bot.get_file(file_id)  # aiogram 3.x
+                buf = BytesIO()
+                await bot.download_file(file.file_path, buf)
+                result[it["id"]] = buf.getvalue()
+            except Exception:
+                # пропускаем, если файл не доступен
+                pass
+        return result

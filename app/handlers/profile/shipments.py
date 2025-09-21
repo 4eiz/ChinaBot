@@ -250,11 +250,13 @@ class ShipmentsHandler:
         tmpdir = tempfile.gettempdir()  # на Linux → /tmp, на Windows → C:\Users\...\AppData\Local\Temp
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_user_{user_id}.pdf")
 
+        user = await self.users.get_user(user_id=user_id)
+
         pdf = PDFExportService()
         path = pdf.generate_user_cart_pdf(
             file_path=file_path,
             cargo=cargo,
-            user={"first_name": call.from_user.first_name or ""},
+            user=user,
             items=items,
             settlement_row=row,
             photos=photos,  # {item_id: bytes}
@@ -309,7 +311,7 @@ class ShipmentsHandler:
 
         text = (
             f"🛍 <b>{item['title']}</b>\n\n"
-            f"💰 Цена: <code>{item['price'] * rate}$</code>\n"
+            f"💰 Цена: <code>{(item['price'] * rate * item['quantity']):.2f}$</code>\n"
             f"📦 Количество: <code>{item['quantity']}</code>\n"
             f"⚖️ Вес: <code>{item['weight_kg']} кг</code>\n"
         )

@@ -81,7 +81,7 @@ class AdminShipments:
         text = (
             f"📦 <b>Посылка #{cargo_id}</b>\n"
             f"🔖 Редактирование: <code>{cargo['status']}</code>\n"
-            f"💵 Оплата: <code>{cargo.get('payment_status') or '—'}</code>\n"
+            f"💵 Стоимость: <code>{cargo.get('payment_status') or '—'}</code>\n"
             # f"🚚 Маршрут: <code>{cargo.get('route_status') or '—'}</code>\n"
             f"⚖️ Вес: <code>{legs['total_weight_kg']} кг</code>\n"
             f"💰 CN→MSK: <code>{legs['cn_to_msk']['delivery_cost_usd']}$</code>\n"

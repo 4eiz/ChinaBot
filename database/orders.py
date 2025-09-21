@@ -516,7 +516,6 @@ class ItemsDB:
         )
 
 
-
     async def users_in_cargo(self, *, cargo_id: int) -> list[int]:
         """
         Список user_id, у кого есть товары в этой посылке.

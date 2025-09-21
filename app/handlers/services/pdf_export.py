@@ -206,24 +206,24 @@ class PDFExportService:
         elements: list = []
 
         # ---- Заголовок ----
-        user_name = html.escape(user.get("first_name") or user.get("name") or "User")
+        user_name = html.escape(f"{user.get('name')} {user.get('surname')}" or user.get("name") or "User")
         elements.append(Paragraph(f"Посылка #{cargo.get('id', '-') } — {user_name}", self.styles["iOSTitle"]))
 
         # ---- Итоги (паспорт + суммы) ----
         s = settlement_row
 
-        goods_usd       = float(s.get("goods_usd", 0))
-        goods_paid_usd  = float(s.get("goods_paid_usd", 0))
-        msk_usd         = float(s.get("msk_usd", 0))
-        msk_paid_usd    = float(s.get("msk_paid_usd", 0))
-        by_usd          = float(s.get("by_usd", 0))
-        by_paid_usd     = float(s.get("by_paid_usd", 0))
-        advance_usd     = float(s.get("advance_usd", 0))
+        goods_usd  = float(s.get("goods_usd", 0))
+        goods_paid_usd = float(s.get("goods_paid_usd", 0))
+        msk_usd = float(s.get("msk_usd", 0))
+        msk_paid_usd = float(s.get("msk_paid_usd", 0))
+        by_usd = float(s.get("by_usd", 0))
+        by_paid_usd = float(s.get("by_paid_usd", 0))
+        advance_usd = float(s.get("advance_usd", 0))
 
-        total_due_raw   = float(s.get("total_due_usd", 0))  # долг после авансов/прочего
-        total_over_raw  = float(s.get("total_overpay_usd", s.get("to_refund_usd", 0)))  # совместимость
+        total_due_raw = float(s.get("total_due_usd", 0))  # долг после авансов/прочего
+        total_over_raw = float(s.get("total_overpay_usd", s.get("to_refund_usd", 0)))  # совместимость
 
-        net_due    = round(max(total_due_raw  - total_over_raw, 0.0), 2)
+        net_due = round(max(total_due_raw  - total_over_raw, 0.0), 2)
         net_refund = round(max(total_over_raw - total_due_raw,  0.0), 2)
 
         def kv(icon: str, label: str, value_html: str):
@@ -237,11 +237,11 @@ class PDFExportService:
             kv("Bookmark.png", "Статус", html.escape(cargo.get("status") or "—")),
             kv("Balance Scale.png", "Всего товаров", html.escape(str(cargo.get("items_count", 0)))),
 
-            kv("Shopping Bags.png", "Товар",   f"{goods_usd:.2f} $ (оплачено {goods_paid_usd:.2f} $)"),
-            kv("Delivery Truck.png", "CN→MSK", f"{msk_usd:.2f} $ (оплачено {msk_paid_usd:.2f} $)"),
-            kv("Delivery Truck.png", "MSK→BY", f"{by_usd:.2f} $ (оплачено {by_paid_usd:.2f} $)"),
+            kv("Shopping Bags.png", "Товар", f"{goods_usd:.2f}$ (оплачено {goods_paid_usd:.2f} $)"),
+            kv("Delivery Truck.png", "CN→MSK", f"{msk_usd:.2f}$ (оплачено {msk_paid_usd:.2f} $)"),
+            kv("Delivery Truck.png", "MSK→BY", f"{by_usd:.2f}$ (оплачено {by_paid_usd:.2f} $)"),
 
-            kv("Credit Card.png", "Аванс", f"{advance_usd:.2f} $"),
+            kv("Credit Card.png", "Аванс", f"{advance_usd:.2f}$"),
         ]
         if net_due > 0:
             totals_rows.append(kv("Money Bag.png", "Итого к оплате", f"{net_due:.2f} $"))
@@ -258,7 +258,7 @@ class PDFExportService:
         elements += [totals, Spacer(1, 16)]
 
         # ---- Таблица товаров ----
-        header = ["#", "Фото", "Название", "Кол-во", "Цена ¥", "Вес (кг)", "Ссылка"]
+        header = ["#", "Фото", "Название", "Кол-во", "Цена $", "Вес (кг)", "Ссылка"]
         data: list[list] = [header]
         photo_map = photos or {}
 
@@ -277,12 +277,26 @@ class PDFExportService:
             else:
                 url_par = Paragraph("-", self.styles["iOS"])
 
+            # price = str(item.get("price", 0))
+            rate = user.get("rate")
+            # print(user)
+            if rate:
+                try:
+                    price_usd = f'{(float(item.get("price", 0)) * float(rate) * int(item.get("quantity"))):.2f}'
+                    # print(price_usd)
+
+                except Exception:
+                    price_usd = "-"
+            else:
+                price_usd = "-"
+
+
             row = [
                 str(idx),
                 thumb,
                 title_par,
                 str(item.get("quantity", 0)),
-                str(item.get("price", 0)),
+                price_usd,
                 str(item.get("weight_kg", 0)),
                 url_par,
             ]
@@ -563,7 +577,8 @@ class PDFExportService:
             rate = it.get("rate") or it.get("user_rate") or it.get("owner_rate")
             if rate:
                 try:
-                    price_usd = f'{float(it.get("price", 0)) * float(rate):.2f}'
+                    price_usd = f'{(float(it.get("price", 0)) * float(rate) * int(it.get("quantity"))):.2f}'
+
                 except Exception:
                     price_usd = "-"
             else:
