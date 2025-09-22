@@ -1,7 +1,7 @@
 import asyncpg
 from typing import Optional
 
-from config import ADMIN_ID, ADMIN_NUMBER
+from config import ADMIN_ID, ADMIN_NUMBER, DEFAULT_RATE
 
 class UsersDB:
     """Класс для работы с юзером
@@ -14,6 +14,8 @@ class UsersDB:
     :param get_user(): - Получение юзера
     """
 
+    default_rate = str(DEFAULT_RATE)
+
     REQUIRED_COLUMNS = {
         'id': 'BIGINT PRIMARY KEY',
         'name': 'TEXT',
@@ -21,7 +23,7 @@ class UsersDB:
         'phone_number': 'TEXT',
         'source': 'TEXT',
         'balance': 'NUMERIC DEFAULT 0',
-        'rate': 'NUMERIC DEFAULT 0.1822',  # ← добавили колонку курса
+        'rate': f'NUMERIC DEFAULT {default_rate}',  # ← добавили колонку курса
         'is_admin': 'BOOLEAN DEFAULT FALSE',
         'created_at': 'TIMESTAMP DEFAULT NOW()'
     }
