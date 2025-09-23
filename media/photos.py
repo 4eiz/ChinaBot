@@ -15,17 +15,17 @@ class PhotoBank:
     SLIDE4 = BASE / "media/images/slide4.jpg"
 
     # 🧭 Основные фото
-    MENU_IMAGE = BASE / "media/photos/menu.jpg"
-    PROFILE_IMAGE = BASE / "media/photos/profile.png"
-    CARGOS_IMAGE = BASE / "media/photos/cargos.png"
+    MENU_IMAGE = BASE / "media/images/menu.jpg"
+    PROFILE_IMAGE = BASE / "media/images/profile.jpg"
+    CARGOS_IMAGE = BASE / "media/images/cargos.jpg"
 
     # 🔐 Админка
-    ADMIN_PANEL_IMAGE = BASE / "media/photos/admin_panel.png"
+    ADMIN_PANEL_IMAGE = BASE / "media/images/admin_panel.png"
 
     # 📦 Категории
-    CATEGORY_HOUSEHOLD = BASE / "media/photos/categories/household.jpg"
-    CATEGORY_CLOTHES = BASE / "media/photos/categories/clothes.jpg"
-    CATEGORY_SHOES = BASE / "media/photos/categories/shoes.jpg"
+    CATEGORY_HOUSEHOLD = BASE / "media/images/categories/household.jpg"
+    CATEGORY_CLOTHES = BASE / "media/images/categories/clothes.jpg"
+    CATEGORY_SHOES = BASE / "media/images/categories/shoes.jpg"
 
     # 🧾 Telegram file_ids
     TELEGRAM_FILE_IDS = {
