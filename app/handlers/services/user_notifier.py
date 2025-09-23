@@ -1,6 +1,6 @@
 from aiogram import Bot
-from typing import Optional
-
+from typing import Optional, Iterable
+from decimal import Decimal
 
 class UserNotifier:
     """
@@ -46,8 +46,30 @@ class UserNotifier:
         cargo = await cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo:
             return
-        user_id = int(cargo.get("owner_user_id"))
-        await self.shipment_rejected(user_id=user_id, cargo=cargo)
+
+        owner_user_id = cargo.get("owner_user_id")
+        if owner_user_id is not None:
+            # персональная посылка
+            try:
+                user_id = int(owner_user_id)
+            except Exception:
+                return
+            await self.shipment_rejected(user_id=user_id, cargo=cargo)
+        else:
+            # общая посылка — шлём всем участникам
+            user_ids = await cargo_service.items.users_in_cargo(cargo_id=cargo["id"])
+            sent_to = set()
+            for uid in user_ids:
+                if uid is None:
+                    continue
+                try:
+                    uid_int = int(uid)
+                except Exception:
+                    continue
+                if uid_int in sent_to:
+                    continue
+                sent_to.add(uid_int)
+                await self.shipment_rejected(user_id=uid_int, cargo=cargo)
 
     async def shipment_accepted_by_id(self, *, cargo_service, cargo_id: int) -> None:
         """
@@ -56,5 +78,27 @@ class UserNotifier:
         cargo = await cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo:
             return
-        user_id = int(cargo.get("owner_user_id"))
-        await self.shipment_accepted(user_id=user_id, cargo=cargo)
+
+        owner_user_id = cargo.get("owner_user_id")
+        if owner_user_id is not None:
+            # персональная посылка
+            try:
+                user_id = int(owner_user_id)
+            except Exception:
+                return
+            await self.shipment_accepted(user_id=user_id, cargo=cargo)
+        else:
+            # общая посылка — шлём всем участникам
+            user_ids = await cargo_service.items.users_in_cargo(cargo_id=cargo["id"])
+            sent_to = set()
+            for uid in user_ids:
+                if uid is None:
+                    continue
+                try:
+                    uid_int = int(uid)
+                except Exception:
+                    continue
+                if uid_int in sent_to:
+                    continue
+                sent_to.add(uid_int)
+                await self.shipment_accepted(user_id=uid_int, cargo=cargo)
