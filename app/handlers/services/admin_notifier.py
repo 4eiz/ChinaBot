@@ -150,3 +150,27 @@ class AdminNotifier:
             reply_markup=kb,
             parse_mode="HTML",
         )
+
+        # 2) Затем Excel-файл (как в твоём примере PDF)
+        # excel = ExcelExportService()
+        excel_china_to_msk_object = self.excel_export.ExcelExportService(bot=self.bot)
+        file_path = await excel_china_to_msk_object.generate_goods_sheet(cargo_service=cargo_service, cargo_id=cargo["id"])
+
+        file = types.FSInputFile(file_path)
+        caption = f"📄 Экспорт посылки #{cargo['id']} (Карго)"
+        await self.bot.send_document(
+            chat_id=self.admin_chat_id,
+            document=file,
+            caption=caption,
+        )
+
+        excel_msk_to_by_object = self.excel_export.ExcelTextFormExportService()
+        file_path = await excel_msk_to_by_object.generate_text_form(cargo_service=cargo_service, cargo_id=cargo["id"])
+
+        file = types.FSInputFile(file_path)
+        caption = f"📄 Экспорт посылки #{cargo['id']} (Садовод)"
+        await self.bot.send_document(
+            chat_id=self.admin_chat_id,
+            document=file,
+            caption=caption,
+        )
