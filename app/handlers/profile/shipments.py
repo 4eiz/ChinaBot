@@ -13,6 +13,7 @@ from app.handlers.services.pdf_export import PDFExportService
 from app.handlers.services.admin_notifier import AdminNotifier
 
 from config import bot, ADMIN_CHAT_ID
+from media.photos import PhotoBank
 
 
 
@@ -48,12 +49,16 @@ class ShipmentsHandler:
     async def list_shipments(self, call: types.CallbackQuery):
         # ЛИЧНЫЕ
         await call.message.delete()
+
         user_id = call.from_user.id
         cargos = await self.cargo_service.cargos.list_by_user(user_id=user_id)  # личные
+
         text = "📦 Ваши ЛИЧНЫЕ посылки:" if cargos else "У вас пока нет личных посылок."
         data = [dict(c) for c in cargos]
         kb = ShipmentsKB.list_shipments(cargos=data, mode="personal")
-        await call.message.answer(text=text, reply_markup=kb)
+        photo = PhotoBank.get_file('CARGOS_IMAGE')
+
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
     async def list_shared_shipments(self, call: types.CallbackQuery):
@@ -66,7 +71,10 @@ class ShipmentsHandler:
         text = "👥 Общие посылки, где есть ваши товары:" if cargos else "В общих посылках ваших товаров пока нет."
         data = [dict(c) for c in cargos]
         kb = ShipmentsKB.list_shipments(cargos=data, mode="shared")
-        await call.message.answer(text=text, reply_markup=kb)
+
+        photo = PhotoBank.get_file('CARGOS_IMAGE')
+
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
     async def create_shipment(self, call: types.CallbackQuery, state: FSMContext):

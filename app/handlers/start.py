@@ -10,7 +10,7 @@ from media import PhotoBank
 import config
 
 from keyboards import StartKB, MenuCallback
-
+from media import PhotoBank
 
 
 class StartHandler:
@@ -23,6 +23,7 @@ class StartHandler:
         self.router.callback_query.register(self.start_info, MenuCallback.filter(F.action == "start_info"))
         self.router.callback_query.register(self.start_support, MenuCallback.filter(F.action == "start_support"))
         self.router.callback_query.register(self.start_home, MenuCallback.filter(F.action == "start_home"))
+
 
     async def start(self, message: Message, state: FSMContext):
         await message.delete()
@@ -54,13 +55,15 @@ class StartHandler:
             return
 
         # старый пользователь — показываем домашнее меню
-        welcome = (
+        text = (
             f"👋 <b>Добро пожаловать в {config.SHOP_NAME}!</b>\n\n"
             "Здесь вы можете оформить товары из Китая, вести посылки и отслеживать оплату.\n"
             "Выберите раздел ниже:"
         )
         kb = StartKB.main(is_admin=is_admin)
-        await message.answer(text=welcome, reply_markup=kb)
+        photo = PhotoBank.get_file('MENU_IMAGE')
+
+        await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
     # --- callbacks ---
 
@@ -115,5 +118,6 @@ class StartHandler:
             "Выберите раздел ниже:"
         )
         kb = StartKB.main(is_admin=is_admin)
+        photo = PhotoBank.get_file('MENU_IMAGE')
 
-        await call.message.answer(text=text, reply_markup=kb)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)

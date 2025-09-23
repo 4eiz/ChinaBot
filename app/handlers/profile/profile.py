@@ -6,6 +6,8 @@ from database import UsersDB
 from database.orders import CargoService
 from decimal import Decimal
 
+from media import PhotoBank
+
 
 class ProfileHandler:
     """Хендлер профиля пользователя."""
@@ -54,7 +56,9 @@ class ProfileHandler:
         is_admin = bool(await self.users_db.is_admin(user_id=message.from_user.id))
         kb = ProfileKB.main_menu(is_admin=is_admin)
 
-        await message.answer(text=text, reply_markup=kb)
+        photo = PhotoBank.get_file('PROFILE_IMAGE')
+
+        await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
     async def open_profile(self, call: types.CallbackQuery, state: FSMContext):
         if state:
@@ -65,8 +69,9 @@ class ProfileHandler:
         text = await self._render_profile(user_id=call.from_user.id)
         is_admin = bool(await self.users_db.is_admin(user_id=call.from_user.id))
         kb = ProfileKB.main_menu(is_admin=is_admin)
+        photo = PhotoBank.get_file('PROFILE_IMAGE')
 
-        await call.message.answer(text=text, reply_markup=kb)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
     async def back(self, call: types.CallbackQuery):
         await call.message.delete()

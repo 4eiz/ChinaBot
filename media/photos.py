@@ -15,8 +15,9 @@ class PhotoBank:
     SLIDE4 = BASE / "media/images/slide4.jpg"
 
     # 🧭 Основные фото
-    WELCOME_IMAGE = BASE / "media/photos/welcome.jpg"
-    EXAMPLE_PRODUCT = BASE / "media/photos/example_product.png"
+    MENU_IMAGE = BASE / "media/photos/menu.jpg"
+    PROFILE_IMAGE = BASE / "media/photos/example_product.png"
+    CARGOS_IMAGE = BASE / "media/photos/example_product.png"
 
     # 🔐 Админка
     ADMIN_PANEL_IMAGE = BASE / "media/photos/admin_panel.png"
