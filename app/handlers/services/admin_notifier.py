@@ -45,10 +45,15 @@ class AdminNotifier:
 
         await cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo["id"])
 
-        user_id = cargo.get("owner_user_id", 0) or {}
-        user = await cargo_service.users.get_user(user_id=user_id)
-        uline = f"@{username}" if username is not None else "без username"
-        fio = f"{user.get('name')} {user.get('surname')}"
+        user_id = cargo.get("owner_user_id", None)
+        if user_id:
+            user = await cargo_service.users.get_user(user_id=user_id)
+            uline = f"@{username}" if username is not None else "без username"
+            fio = f"{user.get('name')} {user.get('surname')}"
+
+        else:
+            uline = "<code>Общая</code>"
+            fio = "Нету"
 
         tariff = await cargo_service.cargo_types.get_name_by_id(
             cargo_type_id=cargo["cargo_type_id"]
