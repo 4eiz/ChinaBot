@@ -16,8 +16,8 @@ class PhotoBank:
 
     # 🧭 Основные фото
     MENU_IMAGE = BASE / "media/photos/menu.jpg"
-    PROFILE_IMAGE = BASE / "media/photos/example_product.png"
-    CARGOS_IMAGE = BASE / "media/photos/example_product.png"
+    PROFILE_IMAGE = BASE / "media/photos/profile.png"
+    CARGOS_IMAGE = BASE / "media/photos/cargos.png"
 
     # 🔐 Админка
     ADMIN_PANEL_IMAGE = BASE / "media/photos/admin_panel.png"
