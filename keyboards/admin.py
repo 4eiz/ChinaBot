@@ -37,13 +37,14 @@ class AdminKB:
         b.button(text="👥 Сводка по людям", callback_data=AdminFlowCallback(action="summary", id=cargo_id).pack())
         b.button(text="📄 Экспорт PDF (админ)", callback_data=AdminFlowCallback(action="export_admin_pdf", id=cargo_id).pack())
         b.button(text="🧾 Экспорт товаров (PDF)", callback_data=AdminFlowCallback(action="export_items_pdf", id=cargo_id).pack())
-        b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="shipments").pack())
         
         if cargo.get("status") == "open":
             b.button(
                 text="📨 Отправить посылку",
                 callback_data=ShipmentFlowCallback(action="send_request", id=cargo_id).pack()
             )
+        
+        b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="shipments").pack())
         
         b.adjust(1)
         return b.as_markup()
