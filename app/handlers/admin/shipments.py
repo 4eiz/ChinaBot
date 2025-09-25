@@ -87,7 +87,7 @@ class AdminShipments:
             f"💰 CN→MSK: <code>{legs['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 MSK→BY: <code>{legs['msk_to_by']['delivery_cost_usd']}$</code>\n"
         )
-        kb = AdminKB.shipment_view(cargo_id=cargo_id)
+        kb = AdminKB.shipment_view(cargo=cargo)
         await call.message.answer(text=text, reply_markup=kb)
 
 

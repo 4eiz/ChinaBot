@@ -1,7 +1,7 @@
 # keyboards/admin_kb.py  (или где у тебя лежит AdminKB)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
-from .callback_data import AdminFlowCallback, PaymentFlowCallback, ProfileFlowCallback
+from .callback_data import AdminFlowCallback, PaymentFlowCallback, ProfileFlowCallback, ShipmentFlowCallback
 
 class AdminKB:
     @staticmethod
@@ -28,13 +28,23 @@ class AdminKB:
         return b.as_markup()
 
     @staticmethod
-    def shipment_view(cargo_id: int) -> InlineKeyboardMarkup:
+    def shipment_view(cargo: int) -> InlineKeyboardMarkup:
+
+        cargo_id = cargo.get('id')
+
         b = InlineKeyboardBuilder()
         b.button(text="🔖 Статусы", callback_data=AdminFlowCallback(action="status", id=cargo_id).pack())
         b.button(text="👥 Сводка по людям", callback_data=AdminFlowCallback(action="summary", id=cargo_id).pack())
         b.button(text="📄 Экспорт PDF (админ)", callback_data=AdminFlowCallback(action="export_admin_pdf", id=cargo_id).pack())
         b.button(text="🧾 Экспорт товаров (PDF)", callback_data=AdminFlowCallback(action="export_items_pdf", id=cargo_id).pack())
         b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="shipments").pack())
+        
+        if cargo.get("status") == "open":
+            b.button(
+                text="📨 Отправить посылку",
+                callback_data=ShipmentFlowCallback(action="send_request", id=cargo_id).pack()
+            )
+        
         b.adjust(1)
         return b.as_markup()
 

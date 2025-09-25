@@ -11,8 +11,6 @@ class ProfileKB:
     def main_menu(*, is_admin: bool = False) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
         b.button(text="📦 Мои посылки", callback_data=ProfileFlowCallback(action="shipments").pack())
-        if is_admin:
-            b.button(text="🛠 Админ-панель", callback_data=AdminFlowCallback(action="menu").pack())
         b.button(text="⬅ Назад", callback_data=MenuCallback(action="start_home").pack())
         b.adjust(1, 1, 1)
         return b.as_markup()
