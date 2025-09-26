@@ -1,9 +1,9 @@
-import os
-import tempfile
 from io import BytesIO
 
 from aiogram import types, F, Router
 from typing import Dict
+from decimal import Decimal
+from config import CLEAR_RATE
 
 from keyboards import AdminFlowCallback, AdminKB
 from app.handlers.services.pdf_export import PDFExportService
@@ -76,16 +76,59 @@ class AdminShipments:
             text = "❌ Посылка не найдена"
             return await call.answer(text=text, show_alert=True)
 
+        # существующий расчёт доставки по двум плечам
         legs = await self.cargo.compute_pricing_two_legs(cargo_id=cargo_id)
+
+        # === НОВОЕ: агрегаты по товарам/юзерам и стоимости ===
+        items = await self.cargo.items.list_by_cargo(cargo_id=cargo_id)
+        item_count = len(items)
+
+        users_in = await self.cargo.items.users_in_cargo(cargo_id=cargo_id)
+        user_count = len(users_in)
+
+        # сумма в юанях из БД (price * quantity)
+        sum_cny = Decimal('0')
+        for it in items:
+            price = Decimal(str(it.get("price") or 0))
+            qty   = Decimal(str(it.get("quantity") or 1))
+            sum_cny += price * qty
+
+        # сумма в USD по курсу каждого юзера (через готовый totals_for_user_in_cargo)
+        sum_usd_by_user = Decimal('0')
+        for uid in users_in:
+            goods_usd, _ = await self.cargo.items.totals_for_user_in_cargo(
+                cargo_id=cargo_id, user_id=uid
+            )
+            sum_usd_by_user += goods_usd
+        sum_usd_by_user = sum_usd_by_user.quantize(Decimal('0.01'))
+
+        # «чистая» сумма в USD: цена в CNY * CLEAR_RATE (из конфига)
+        clear_rate = Decimal(str(CLEAR_RATE))
+        sum_usd_clear = (sum_cny * clear_rate).quantize(Decimal('0.01'))
+
+        # прибыль: USD (по курсам юзеров) - USD (чистая)
+        profit = (sum_usd_by_user - sum_usd_clear).quantize(Decimal('0.01'))
+
+        # форматирование
+        sum_cny_str       = f"{sum_cny.quantize(Decimal('0.01'))} ¥"
+        sum_usd_user_str  = f"{sum_usd_by_user:.2f}$"
+        sum_usd_clear_str = f"{sum_usd_clear:.2f}$"
+        profit_str        = f"{profit:.2f}$"
 
         text = (
             f"📦 <b>Посылка #{cargo_id}</b>\n"
             f"🔖 Редактирование: <code>{cargo['status']}</code>\n"
             f"💵 Стоимость: <code>{cargo.get('payment_status') or '—'}</code>\n"
-            # f"🚚 Маршрут: <code>{cargo.get('route_status') or '—'}</code>\n"
             f"⚖️ Вес: <code>{legs['total_weight_kg']} кг</code>\n"
             f"💰 CN→MSK: <code>{legs['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 MSK→BY: <code>{legs['msk_to_by']['delivery_cost_usd']}$</code>\n"
+            f"\n"
+            f"🧩 Товаров: <code>{item_count}</code>\n"
+            f"👥 Юзеров: <code>{user_count}</code>\n"
+            f"💴 Сумма (<b>CNY</b>): <code>{sum_cny_str}</code>\n"
+            f"💵 Сумма (<b>USD</b>): <code>{sum_usd_user_str}</code>\n"
+            f"💵 Сумма (<b>USD</b>, честный <code>{CLEAR_RATE}</code>): <code>{sum_usd_clear_str}</code>\n"
+            f"📈 Прибыль: <b><code>{profit_str}</code></b>\n"
         )
         kb = AdminKB.shipment_view(cargo=cargo)
         await call.message.answer(text=text, reply_markup=kb)

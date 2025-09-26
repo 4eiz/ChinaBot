@@ -1,6 +1,7 @@
 from io import BytesIO
 import os, tempfile
 from typing import Dict
+from decimal import Decimal
 
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
@@ -12,7 +13,7 @@ from database import CargoService, UsersDB
 from app.handlers.services.pdf_export import PDFExportService
 from app.handlers.services.admin_notifier import AdminNotifier
 
-from config import bot, ADMIN_CHAT_ID
+from config import bot, ADMIN_CHAT_ID, DEFAULT_RATE
 from media.photos import PhotoBank
 
 
@@ -148,6 +149,7 @@ class ShipmentsHandler:
         text = "<b>✏️ Введите название посылки (до 20 символов):</b>"
         await call.message.answer(text=text)
 
+
     async def view_shipment(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
         await call.message.delete()
 
@@ -162,6 +164,37 @@ class ShipmentsHandler:
 
         pricing2 = await self.cargo_service.compute_pricing_two_legs(cargo_id=cargo_id)
 
+        # -------- НОВОЕ: суммы по товарам текущего пользователя --------
+        # курс пользователя
+        user = await self.cargo_service.users.get_user(call.from_user.id)
+        rate = Decimal(str((user or {}).get("rate") or DEFAULT_RATE))
+
+        # сумму в юанях стараемся взять агрегатом, если он есть; иначе — вручную по позициям
+        sum_cny_user = Decimal("0")
+        try:
+            # если в сервисе есть такой метод — используем его
+            sum_cny_user = await self.cargo_service.items.sum_cny_for_user_in_cargo(
+                cargo_id=cargo_id,
+                user_id=call.from_user.id
+            )
+            sum_cny_user = Decimal(str(sum_cny_user))
+        except Exception:
+            # фолбэк: берём все позиции посылки и фильтруем по user_id
+            items = await self.cargo_service.items.list_by_cargo(cargo_id=cargo_id)
+            for it in items:
+                if it.get("user_id") != call.from_user.id:
+                    continue
+                price = Decimal(str(it.get("price") or 0))
+                qty   = Decimal(str(it.get("quantity") or 1))
+                sum_cny_user += price * qty
+
+        sum_usd_user = (sum_cny_user * rate).quantize(Decimal("0.01"))
+
+        sum_cny_str = f"{sum_cny_user.quantize(Decimal('0.01'))}¥"
+        sum_usd_str = f"{sum_usd_user:.2f}$"
+        rate_str    = f"{rate.normalize()}"  # для красивого отображения 12.3 вместо 12.3000
+
+        # -------- текст карточки --------
         text = (
             f"📦 <b>Посылка</b>\n\n"
             f"🏷️ <b>Название:</b> <code>{cargo['title'] or '—'}</code>\n"
@@ -172,11 +205,14 @@ class ShipmentsHandler:
             f"⚖️ <b>Вес:</b> <code>{pricing2['total_weight_kg']} кг</code>\n"
             f"💰 <b>Доставка CN→MSK:</b> <code>{pricing2['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 <b>Доставка MSK→BY:</b> <code>{pricing2['msk_to_by']['delivery_cost_usd']}$</code>\n"
+            f"\n"
+            f"🧾 <b>Ваши товары:</b>\n"
+            f"   • <b>Сумма в ¥:</b> <code>{sum_cny_str}</code>\n"
+            f"   • <b>Сумма в $:</b> <code>{sum_usd_str}</code> <i>курс <code>{rate_str}</code></i>\n"
         )
 
         kb = ShipmentViewKB.main(cargo=cargo)
         await call.message.answer(text=text, reply_markup=kb)
-
 
 
     async def list_items(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
