@@ -86,6 +86,8 @@ class AdminPayments:
         """
         Сохранение суммы
         """
+        
+        await message.delete()
 
         await state.set_state(PaymentForm.note)
 

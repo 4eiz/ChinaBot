@@ -83,7 +83,7 @@ class AdminKB:
         b = InlineKeyboardBuilder()
         for amount in ("5","10","20","50","100","200"):
             b.button(text=f"{amount} $", callback_data=PaymentFlowCallback(action="pay_amount", amount=amount).pack())
-        b.button(text="🔢 Другая сумма", callback_data=AdminFlowCallback(action="pay_amount_custom").pack())
+        # b.button(text="🔢 Другая сумма", callback_data=AdminFlowCallback(action="pay_amount_custom").pack())
         # Назад к типам (ВАЖНО для твоего первого бага)
         b.button(text="⬅ Назад к типам", callback_data=AdminFlowCallback(action="back").pack())
         b.adjust(3, 3, 1)
