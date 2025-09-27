@@ -90,7 +90,7 @@ class AdminPayments:
         msg_id = message.message_id -1
         chat_id = message.from_user.id
         await message.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        await message.delete()
+        # await message.delete()
 
         await state.set_state(PaymentForm.note)
 
