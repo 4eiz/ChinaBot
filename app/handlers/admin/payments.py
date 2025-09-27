@@ -2,6 +2,7 @@ from decimal import Decimal
 from aiogram import types, F, Router
 from aiogram.fsm.context import FSMContext
 
+import config
 from keyboards import AdminFlowCallback, AdminKB, PaymentFlowCallback
 from .fsm import PaymentForm  # если FSM лежит рядом с админом; иначе поправь импорт
 
@@ -89,7 +90,7 @@ class AdminPayments:
         
         msg_id = message.message_id -1
         chat_id = message.from_user.id
-        await message.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        await config.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         # await message.delete()
 
         await state.set_state(PaymentForm.note)
