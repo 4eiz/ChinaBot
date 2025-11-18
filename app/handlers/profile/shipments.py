@@ -252,11 +252,11 @@ class ShipmentsHandler:
             return
 
         # берём только ТВОИ товары (в общей — это must; в личной — тоже корректно)
-        items = await self.cargo_service.items.list_by_cargo_for_user_paginated(
+        raw_items = await self.cargo_service.items.list_by_cargo_for_user_paginated(
             cargo_id=cargo_id, user_id=user_id, limit=10_000, offset=0
         )
 
-        if not items:
+        if not raw_items:
             text = "Похоже, у вас нет товаров в этой посылке."
             await call.message.answer(text=text)
             return
@@ -269,11 +269,31 @@ class ShipmentsHandler:
             await call.message.answer(text=text)
             return
 
-        # тянем миниатюры по file_id
-        photos = await self._collect_item_photos(bot=call.bot, items=items)
+        detailed_items: list[dict] = []
+        for it in raw_items:
+            info = await self.cargo_service.get_item_detailed_info(
+                cargo_id=cargo_id,
+                item_id=it["id"],
+            )
+            if not info:
+                continue
+
+            ext = dict(it)
+            ext["price_usd_per_unit"] = info["price_usd_per_unit"]
+            ext["delivery_per_unit_usd"] = info["delivery_per_unit_usd"]
+            ext["final_total_usd"] = info["final_total_usd"]
+            # если хочешь позже — можно ещё положить price_usd_total, delivery_total и т.п.
+            detailed_items.append(ext)
+
+        if not detailed_items:
+            await call.message.answer("Не удалось собрать детальную информацию по товарам.")
+            return
+
+        # тянем миниатюры по file_id (используем те же id)
+        photos = await self._collect_item_photos(bot=call.bot, items=detailed_items)
 
         # готовим PDF для юзера
-        tmpdir = tempfile.gettempdir()  # на Linux → /tmp, на Windows → C:\Users\...\AppData\Local\Temp
+        tmpdir = tempfile.gettempdir()
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_user_{user_id}.pdf")
 
         user = await self.users.get_user(user_id=user_id)
@@ -283,13 +303,14 @@ class ShipmentsHandler:
             file_path=file_path,
             cargo=cargo,
             user=user,
-            items=items,
+            items=detailed_items,
             settlement_row=row,
             photos=photos,  # {item_id: bytes}
         )
 
         text = "📄 Ваш отчёт по товарам в этой посылке"
         await call.message.answer_document(document=FSInputFile(file_path), caption=text)
+
 
     async def _collect_item_photos(self, *, bot, items: list[dict]) -> Dict[int, bytes]:
         """

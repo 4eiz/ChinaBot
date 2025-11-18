@@ -188,77 +188,53 @@ class PDFExportService:
         user: dict,
         items: list[dict],
         settlement_row: dict,
-        photos: dict[int, bytes] | None = None,
+        photos: Optional[dict[int, bytes]] = None,
     ) -> str:
         """
-        Пользовательский PDF: «Мои товары в посылке».
+        Юзерский отчёт по товарам в посылке.
 
-        Итоги считаются с взаимозачётом:
-            net_due    = max(total_due_usd - total_overpay_usd, 0)
-            net_refund = max(total_overpay_usd - total_due_usd, 0)
+        items ДОЛЖНЫ уже содержать:
+          - price_usd_per_unit
+          - delivery_per_unit_usd
+          - final_total_usd
+        которые посчитаны в CargoService (get_item_detailed_info).
+        Здесь — только отображение.
         """
+        from decimal import Decimal
+
+        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+
         doc = SimpleDocTemplate(
             file_path,
             pagesize=A4,
-            leftMargin=40, rightMargin=40,
-            topMargin=40, bottomMargin=40,
+            leftMargin=18,
+            rightMargin=18,
+            topMargin=18,
+            bottomMargin=18,
         )
         elements: list = []
 
         # ---- Заголовок ----
-        user_name = html.escape(f"{user.get('name')} {user.get('surname')}" or user.get("name") or "User")
-        elements.append(Paragraph(f"Посылка #{cargo.get('id', '-') } — {user_name}", self.styles["iOSTitle"]))
+        title = cargo.get("title") or f"Посылка #{cargo.get('id', '-')}"
+        elements.append(Paragraph(f"Ваши товары в посылке: {title}", self.styles["iOSTitle"]))
+        elements.append(Spacer(1, 10))
 
-        # ---- Итоги (паспорт + суммы) ----
-        s = settlement_row
+        # ---- Краткая сводка по оплате ----
+        total_goods_usd = settlement_row.get("goods_usd") or 0
+        total_delivery_usd = (settlement_row.get("msk_usd") or 0) + (settlement_row.get("by_usd") or 0)
+        total_due_usd = settlement_row.get("total_due_usd") or 0
 
-        goods_usd  = float(s.get("goods_usd", 0))
-        goods_paid_usd = float(s.get("goods_paid_usd", 0))
-        msk_usd = float(s.get("msk_usd", 0))
-        msk_paid_usd = float(s.get("msk_paid_usd", 0))
-        by_usd = float(s.get("by_usd", 0))
-        by_paid_usd = float(s.get("by_paid_usd", 0))
-        advance_usd = float(s.get("advance_usd", 0))
-
-        total_due_raw = float(s.get("total_due_usd", 0))  # долг после авансов/прочего
-        total_over_raw = float(s.get("total_overpay_usd", s.get("to_refund_usd", 0)))  # совместимость
-
-        net_due = round(max(total_due_raw  - total_over_raw, 0.0), 2)
-        net_refund = round(max(total_over_raw - total_due_raw,  0.0), 2)
-
-        def kv(icon: str, label: str, value_html: str):
-            return [
-                self._icon(icon),
-                Paragraph(f'<b>{html.escape(label)}:</b> {value_html}', self.styles["iOS"]),
-            ]
-
-        totals_rows = [
-            kv("Label.png", "Название", html.escape(cargo.get("title") or "—")),
-            kv("Bookmark.png", "Статус", html.escape(cargo.get("status") or "—")),
-            kv("Balance Scale.png", "Всего товаров", html.escape(str(cargo.get("items_count", 0)))),
-
-            kv("Shopping Bags.png", "Товар", f"{goods_usd:.2f}$ (оплачено {goods_paid_usd:.2f} $)"),
-            kv("Delivery Truck.png", "CN→MSK", f"{msk_usd:.2f}$ (оплачено {msk_paid_usd:.2f} $)"),
-            kv("Delivery Truck.png", "MSK→BY", f"{by_usd:.2f}$ (оплачено {by_paid_usd:.2f} $)"),
-
-            kv("Credit Card.png", "Аванс", f"{advance_usd:.2f}$"),
-        ]
-        if net_due > 0:
-            totals_rows.append(kv("Money Bag.png", "Итого к оплате", f"{net_due:.2f} $"))
-        if net_refund > 0:
-            totals_rows.append(kv("Return.png", "Итого к возврату", f"{net_refund:.2f} $"))
-
-        totals = Table(totals_rows, colWidths=[20, 440])
-        totals.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (0, -1), "CENTER"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ]))
-        elements += [totals, Spacer(1, 16)]
+        summary_text = (
+            f"💰 <b>Сводка по оплате</b><br/>"
+            f"Товары: <b>{total_goods_usd:.2f}$</b><br/>"
+            f"Доставка: <b>{total_delivery_usd:.2f}$</b><br/>"
+            f"Итого к оплате: <b>{total_due_usd:.2f}$</b>"
+        )
+        elements.append(Paragraph(summary_text, self.styles["iOS"]))
+        elements.append(Spacer(1, 14))
 
         # ---- Таблица товаров ----
-        header = ["#", "Фото", "Название", "Кол-во", "Цена $", "Вес (кг)", "Ссылка"]
+        header = ["#", "Фото", "Товар", "Кол-во", "Цена (USD)", "Вес (кг)", "Ссылка"]
         data: list[list] = [header]
         photo_map = photos or {}
 
@@ -268,8 +244,34 @@ class PDFExportService:
             if item_id in photo_map and photo_map[item_id]:
                 thumb = self._thumb_from_bytes(photo_map[item_id], size=54)
 
-            title_par = Paragraph(html.escape(str(item.get("title", "—"))), self.styles["iOS"])
+            # --- Название + [ID] + цвет/размер ---
+            base_title = html.escape(str(item.get("title") or "—"))
+            extra_lines: list[str] = []
 
+            if item_id is not None:
+                extra_lines.append(f"[ID: {item_id}]")
+
+            color = item.get("color")
+            if color:
+                extra_lines.append(f"Цвет: {html.escape(str(color))}")
+
+            size = item.get("size")
+            if size:
+                extra_lines.append(f"Размер: {html.escape(str(size))}")
+
+            if extra_lines:
+                title_html = (
+                    base_title
+                    + "<br/><font size=8>"
+                    + "<br/>".join(extra_lines)
+                    + "</font>"
+                )
+            else:
+                title_html = base_title
+
+            title_par = Paragraph(title_html, self.styles["iOS"])
+
+            # --- URL ---
             url_raw = item.get("source_url") or "-"
             if url_raw and url_raw not in ("-", ""):
                 esc = html.escape(url_raw)
@@ -277,47 +279,78 @@ class PDFExportService:
             else:
                 url_par = Paragraph("-", self.styles["iOS"])
 
-            # price = str(item.get("price", 0))
-            rate = user.get("rate")
-            # print(user)
-            if rate:
-                try:
-                    price_usd = f'{(float(item.get("price", 0)) * float(rate) * int(item.get("quantity"))):.2f}'
-                    # print(price_usd)
+            # --- Количество ---
+            qty = Decimal(str(item.get("quantity") or 1))
 
+            # --- Цена: 3 строки (товар/шт, доставка/шт, итог за все) ---
+            goods_per = item.get("price_usd_per_unit")
+            delivery_per = item.get("delivery_per_unit_usd")
+            final_total = item.get("final_total_usd")
+
+            if goods_per is not None and delivery_per is not None and final_total is not None:
+                try:
+                    goods_per_dec = Decimal(str(goods_per))
+                    delivery_per_dec = Decimal(str(delivery_per))
+                    final_total_dec = Decimal(str(final_total))
+
+                    final_per_unit = (goods_per_dec + delivery_per_dec).quantize(Decimal("0.01"))
+
+                    price_lines = [
+                        f"товар/шт: {goods_per_dec:.2f}$",
+                        f"доставка/шт: {delivery_per_dec:.2f}$",
+                        f"итого за {qty} шт: {final_total_dec:.2f}$",
+                    ]
+                    price_cell = Paragraph("<br/>".join(price_lines), self.styles["iOS"])
                 except Exception:
-                    price_usd = "-"
+                    price_cell = Paragraph("-", self.styles["iOS"])
             else:
-                price_usd = "-"
+                # fallback на старую логику, если вдруг чего-то нет
+                rate = user.get("rate")
+                if rate:
+                    try:
+                        price_usd = (float(item.get("price", 0)) * float(rate) * int(qty))
+                        price_cell = Paragraph(f"{price_usd:.2f}$", self.styles["iOS"])
+                    except Exception:
+                        price_cell = Paragraph("-", self.styles["iOS"])
+                else:
+                    price_cell = Paragraph("-", self.styles["iOS"])
+
+            # --- Вес ---
+            weight_val = item.get("weight_kg", 0)
+            try:
+                weight_str = f"{float(weight_val):.3f}"
+            except Exception:
+                weight_str = str(weight_val)
 
             row = [
                 str(idx),
                 thumb,
                 title_par,
-                str(item.get("quantity", 0)),
-                price_usd,
-                str(item.get("weight_kg", 0)),
+                str(qty),
+                price_cell,
+                weight_str,
                 url_par,
             ]
             data.append(row)
 
-        table = Table(data, colWidths=[26, 56, 190, 52, 58, 60, 118])
+        table = Table(data, colWidths=[26, 56, 200, 40, 90, 60, 118])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#007AFF")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("FONTNAME", (0, 0), (-1, -1), self.styles["iOS"].fontName),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("FONTSIZE", (0, 0), (-1, 0), 9),
             ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
+            ("ALIGN", (0, 1), (0, -1), "RIGHT"),   # #
+            ("ALIGN", (3, 1), (5, -1), "RIGHT"),   # qty / price / weight
         ]))
         elements.append(table)
 
         doc.build(elements)
         return file_path
-
 
     # ========= НОВОЕ: админский отчёт =========
 
@@ -520,7 +553,7 @@ class PDFExportService:
 
     def generate_cargo_items_pdf(
         self,
-        *,
+        *_,
         file_path: str,
         cargo: dict,
         items: list[dict],
@@ -536,13 +569,17 @@ class PDFExportService:
             • в первой колонке: «№ [<b>ID</b>]».
         """
 
+        from reportlab.lib.units import cm
+
         os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
 
         doc = SimpleDocTemplate(
             file_path,
             pagesize=landscape(A4),
-            leftMargin=1.2 * cm, rightMargin=1.2 * cm,
-            topMargin=1.2 * cm, bottomMargin=1.2 * cm,
+            leftMargin=1.2 * cm,
+            rightMargin=1.2 * cm,
+            topMargin=1.2 * cm,
+            bottomMargin=1.2 * cm,
             allowSplitting=1,
         )
         elements: list = []
@@ -563,14 +600,14 @@ class PDFExportService:
         for idx, it in enumerate(items, start=1):
             item_id = it.get("id", "-")
 
-            # ---- № + [ID] жирный
+            # ---- № + [ID] жирный (одна строка)
             idx_cell = Paragraph(
                 f"{idx} [<b>{html.escape(str(item_id))}</b>]",
                 self.styles["iOS"]
             )
 
             # ---- миниатюра
-            thumb: Flowable | str = ""
+            thumb = ""
             if it.get("_photo_bytes"):
                 thumb = self._thumb_from_bytes(it["_photo_bytes"], size=56)
             elif photos and item_id in photos:
@@ -612,9 +649,9 @@ class PDFExportService:
 
             data.append([idx_cell, thumb, title, color, size, qty, weight, price_usd, owner, link])
 
-        # ширины колонок
+        # ширины колонок (чуть расширяем № + [ID], чтобы не рвало)
         colWidths = [
-            1.4 * cm,  # № + [ID]
+            1.8 * cm,  # № + [ID]
             2.0 * cm,  # Фото
             6.0 * cm,  # Название
             2.3 * cm,  # Цвет
