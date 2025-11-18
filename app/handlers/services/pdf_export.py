@@ -290,7 +290,6 @@ class PDFExportService:
             else:
                 price_usd = "-"
 
-
             row = [
                 str(idx),
                 thumb,
@@ -519,7 +518,6 @@ class PDFExportService:
         return file_path
 
 
-
     def generate_cargo_items_pdf(
         self,
         *,
@@ -530,9 +528,12 @@ class PDFExportService:
     ) -> str:
         """
         Экспорт всех товаров посылки (landscape A4) с фото, цветом и размером.
-        - Фото: из it["_photo_bytes"] или photos[item_id]
-        - Цвет/Размер: стиль iOSCJK (CJK-шрифт + перенос), строка растягивается
-        - Цена: в $ если есть rate (it['rate']|user_rate|owner_rate)
+
+        ВАЖНО:
+        - Все суммы/курсы считаются в CargoService.get_cargo_info.
+        - Здесь только отображение:
+            • price_usd берём из item["price_usd"] (Decimal/float/str)
+            • в первой колонке: «№ [<b>ID</b>]».
         """
 
         os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
@@ -540,51 +541,60 @@ class PDFExportService:
         doc = SimpleDocTemplate(
             file_path,
             pagesize=landscape(A4),
-            leftMargin=1.2*cm, rightMargin=1.2*cm,
-            topMargin=1.2*cm, bottomMargin=1.2*cm,
-            allowSplitting=1,   # разрешаем разрывы
+            leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+            topMargin=1.2 * cm, bottomMargin=1.2 * cm,
+            allowSplitting=1,
         )
-        elements = []
+        elements: list = []
+
+        items_count = cargo.get("items_count") or len(items)
 
         elements.append(Paragraph(
-            f"Товары посылки #{cargo['id']} — {len(items)} позиций",
+            f"Товары посылки #{cargo.get('id', '-')} — {items_count} позиций",
             self.styles["iOSTitle"]
         ))
-        elements.append(Spacer(1, 0.3*cm))
+        elements.append(Spacer(1, 0.3 * cm))
 
         head = ["#", "Фото", "Название", "Цвет", "Размер", "Кол-во", "Вес (кг)", "Цена $", "Владелец", "Ссылка"]
-        data = [head]
+        data: list[list] = [head]
 
         photos = photos or {}
 
-        for i, it in enumerate(items, start=1):
+        for idx, it in enumerate(items, start=1):
+            item_id = it.get("id", "-")
+
+            # ---- № + [ID] жирный
+            idx_cell = Paragraph(
+                f"{idx} [<b>{html.escape(str(item_id))}</b>]",
+                self.styles["iOS"]
+            )
+
             # ---- миниатюра
-            thumb = ""
+            thumb: Flowable | str = ""
             if it.get("_photo_bytes"):
                 thumb = self._thumb_from_bytes(it["_photo_bytes"], size=56)
-            elif photos and it.get("id") in photos:
-                thumb = self._thumb_from_bytes(photos[it["id"]], size=56)
+            elif photos and item_id in photos:
+                thumb = self._thumb_from_bytes(photos[item_id], size=56)
 
-            # ---- поля
+            # ---- поля товара
             title = Paragraph(html.escape(it.get("title", "—")), self.styles["iOS"])
             color = Paragraph(html.escape(str(it.get("color") or "—")), self.styles["iOSCJK"])
             size  = Paragraph(html.escape(str(it.get("size") or "—")), self.styles["iOSCJK"])
 
-            qty   = str(it.get("quantity", 0))
-            weight = f'{it.get("weight_kg", 0)}'
+            qty    = str(it.get("quantity", 0))
+            weight = str(it.get("weight_kg", 0))
 
-            # цена в $
-            rate = it.get("rate") or it.get("user_rate") or it.get("owner_rate")
-            if rate:
-                try:
-                    price_usd = f'{(float(it.get("price", 0)) * float(rate) * int(it.get("quantity"))):.2f}'
-
-                except Exception:
-                    price_usd = "-"
-            else:
+            # ---- цена в $, уже посчитанная в CargoService
+            raw_price_usd = it.get("price_usd")
+            if raw_price_usd is None:
                 price_usd = "-"
+            else:
+                try:
+                    price_usd = f"{float(raw_price_usd):.2f}"
+                except Exception:
+                    price_usd = str(raw_price_usd)
 
-            # владелец
+            # ---- владелец
             fio = " ".join(filter(None, [it.get("name"), it.get("surname")])) or "—"
             phone = it.get("phone_number") or "—"
             owner = Paragraph(
@@ -592,7 +602,7 @@ class PDFExportService:
                 self.styles["iOS"]
             )
 
-            # ссылка
+            # ---- ссылка
             url_raw = it.get("source_url") or "-"
             if url_raw and url_raw not in ("", "-"):
                 esc = html.escape(url_raw)
@@ -600,23 +610,23 @@ class PDFExportService:
             else:
                 link = Paragraph("-", self.styles["iOS"])
 
-            data.append([str(i), thumb, title, color, size, qty, weight, price_usd, owner, link])
+            data.append([idx_cell, thumb, title, color, size, qty, weight, price_usd, owner, link])
 
-        # ширины колонок (чуть шире фото + места под CJK)
+        # ширины колонок
         colWidths = [
-            0.9*cm,  # #
-            2.0*cm,  # Фото (шире, чтобы миниатюра поместилась)
-            6.0*cm,  # Название
-            2.3*cm,  # Цвет (CJK + перенос)
-            2.3*cm,  # Размер (CJK + перенос)
-            1.3*cm,  # Кол-во
-            1.8*cm,  # Вес
-            1.8*cm,  # Цена $
-            4.6*cm,  # Владелец
-            4.6*cm,  # Ссылка
+            1.4 * cm,  # № + [ID]
+            2.0 * cm,  # Фото
+            6.0 * cm,  # Название
+            2.3 * cm,  # Цвет
+            2.3 * cm,  # Размер
+            1.3 * cm,  # Кол-во
+            1.8 * cm,  # Вес
+            1.8 * cm,  # Цена $
+            4.6 * cm,  # Владелец
+            4.6 * cm,  # Ссылка
         ]
 
-        table = Table(data, colWidths=colWidths, repeatRows=1)  # rowHeights=None => строки сами растут
+        table = Table(data, colWidths=colWidths, repeatRows=1)
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#007AFF")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
@@ -630,8 +640,8 @@ class PDFExportService:
 
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
 
-            ("ALIGN", (0, 1), (0, -1), "RIGHT"),   # #
-            ("ALIGN", (5, 1), (7, -1), "RIGHT"),   # qty/вес/цена
+            ("ALIGN", (0, 1), (0, -1), "LEFT"),    # № + [ID]
+            ("ALIGN", (5, 1), (7, -1), "RIGHT"),   # qty / вес / цена
 
             ("LEFTPADDING", (0, 0), (-1, -1), 3),
             ("RIGHTPADDING", (0, 0), (-1, -1), 3),

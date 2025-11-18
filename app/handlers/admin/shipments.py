@@ -70,53 +70,28 @@ class AdminShipments:
         await call.message.delete()
 
         cargo_id = callback_data.id
-        cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
 
-        if not cargo:
+        info = await self.cargo.get_cargo_info(cargo_id=cargo_id)
+        if not info:
             text = "❌ Посылка не найдена"
             return await call.answer(text=text, show_alert=True)
 
-        # существующий расчёт доставки по двум плечам
-        legs = await self.cargo.compute_pricing_two_legs(cargo_id=cargo_id)
+        cargo = info["cargo"]
+        legs = info["pricing"]
+        item_count = info["items_count"]
+        user_count = info["users_count"]
+        sum_cny = info["sum_cny"]
+        sum_usd_by_user = info["sum_usd_by_user"]
+        sum_usd_clear = info["sum_usd_clear"]
+        profit = info["profit"]
 
-        # === НОВОЕ: агрегаты по товарам/юзерам и стоимости ===
-        items = await self.cargo.items.list_by_cargo(cargo_id=cargo_id)
-        item_count = len(items)
-
-        users_in = await self.cargo.items.users_in_cargo(cargo_id=cargo_id)
-        user_count = len(users_in)
-
-        # сумма в юанях из БД (price * quantity)
-        sum_cny = Decimal('0')
-        for it in items:
-            price = Decimal(str(it.get("price") or 0))
-            qty   = Decimal(str(it.get("quantity") or 1))
-            sum_cny += price * qty
-
-        # сумма в USD по курсу каждого юзера (через готовый totals_for_user_in_cargo)
-        sum_usd_by_user = Decimal('0')
-        for uid in users_in:
-            goods_usd, _ = await self.cargo.items.totals_for_user_in_cargo(
-                cargo_id=cargo_id, user_id=uid
-            )
-            sum_usd_by_user += goods_usd
-        sum_usd_by_user = sum_usd_by_user.quantize(Decimal('0.01'))
-
-        # «чистая» сумма в USD: цена в CNY * CLEAR_RATE (из конфига)
-        clear_rate = Decimal(str(CLEAR_RATE))
-        sum_usd_clear = (sum_cny * clear_rate).quantize(Decimal('0.01'))
-
-        # прибыль: USD (по курсам юзеров) - USD (чистая)
-        profit = (sum_usd_by_user - sum_usd_clear).quantize(Decimal('0.01'))
-
-        # форматирование
-        sum_cny_str       = f"{sum_cny.quantize(Decimal('0.01'))} ¥"
-        sum_usd_user_str  = f"{sum_usd_by_user:.2f}$"
+        sum_cny_str = f"{sum_cny.quantize(Decimal('0.01'))} ¥"
+        sum_usd_user_str = f"{sum_usd_by_user:.2f}$"
         sum_usd_clear_str = f"{sum_usd_clear:.2f}$"
-        profit_str        = f"{profit:.2f}$"
+        profit_str = f"{profit:.2f}$"
 
         text = (
-            f"📦 <b>Посылка #{cargo_id}</b>\n"
+            f"📦 <b>Посылка <code>#{cargo_id}</code></b>\n"
             f"🔖 Редактирование: <code>{cargo['status']}</code>\n"
             f"💵 Стоимость: <code>{cargo.get('payment_status') or '—'}</code>\n"
             f"⚖️ Вес: <code>{legs['total_weight_kg']} кг</code>\n"

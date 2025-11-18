@@ -154,59 +154,41 @@ class ShipmentsHandler:
         await call.message.delete()
 
         cargo_id = callback_data.id
-        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
-        if not cargo:
+
+        info = await self.cargo_service.get_cargo_info(
+            cargo_id=cargo_id,
+            for_user_id=call.from_user.id,
+        )
+        if not info:
             await call.answer("❌ Посылка не найдена", show_alert=True)
             return
 
-        type_row = await self.cargo_service.cargo_types.get(cargo_type_id=cargo["cargo_type_id"])
-        type_name = type_row["name"] if type_row else "—"
+        cargo = info["cargo"]
+        type_name = info["cargo_type_name"] or "—"
+        pricing2 = info["pricing"]
 
-        pricing2 = await self.cargo_service.compute_pricing_two_legs(cargo_id=cargo_id)
-
-        # -------- НОВОЕ: суммы по товарам текущего пользователя --------
-        # курс пользователя
-        user = await self.cargo_service.users.get_user(call.from_user.id)
-        rate = Decimal(str((user or {}).get("rate") or DEFAULT_RATE))
-
-        # сумму в юанях стараемся взять агрегатом, если он есть; иначе — вручную по позициям
-        sum_cny_user = Decimal("0")
-        try:
-            # если в сервисе есть такой метод — используем его
-            sum_cny_user = await self.cargo_service.items.sum_cny_for_user_in_cargo(
-                cargo_id=cargo_id,
-                user_id=call.from_user.id
-            )
-            sum_cny_user = Decimal(str(sum_cny_user))
-        except Exception:
-            # фолбэк: берём все позиции посылки и фильтруем по user_id
-            items = await self.cargo_service.items.list_by_cargo(cargo_id=cargo_id)
-            for it in items:
-                if it.get("user_id") != call.from_user.id:
-                    continue
-                price = Decimal(str(it.get("price") or 0))
-                qty   = Decimal(str(it.get("quantity") or 1))
-                sum_cny_user += price * qty
-
-        sum_usd_user = (sum_cny_user * rate).quantize(Decimal("0.01"))
+        user_block = info.get("current_user") or {}
+        rate = user_block.get("rate", Decimal(str(DEFAULT_RATE)))
+        sum_cny_user = user_block.get("sum_cny", Decimal("0"))
+        sum_usd_user = user_block.get("sum_usd", Decimal("0"))
+        user_items_count = user_block.get("items_count", 0)
 
         sum_cny_str = f"{sum_cny_user.quantize(Decimal('0.01'))}¥"
         sum_usd_str = f"{sum_usd_user:.2f}$"
-        rate_str    = f"{rate.normalize()}"  # для красивого отображения 12.3 вместо 12.3000
+        rate_str = f"{rate.normalize()}"
 
-        # -------- текст карточки --------
         text = (
             f"📦 <b>Посылка</b>\n\n"
             f"🏷️ <b>Название:</b> <code>{cargo['title'] or '—'}</code>\n"
             f"📂 <b>Тип:</b> <code>{type_name}</code>\n"
             f"🔖 <b>Редактирование:</b> <code>{cargo['status']}</code>\n"
             f"💵 <b>Оплата:</b> <code>{cargo.get('payment_status')}</code>\n"
-            f"🚚 <b>Маршрут:</b> <code>{cargo.get('route_status')}</code>\n"
             f"⚖️ <b>Вес:</b> <code>{pricing2['total_weight_kg']} кг</code>\n"
             f"💰 <b>Доставка CN→MSK:</b> <code>{pricing2['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 <b>Доставка MSK→BY:</b> <code>{pricing2['msk_to_by']['delivery_cost_usd']}$</code>\n"
             f"\n"
             f"🧾 <b>Ваши товары:</b>\n"
+            f"   • <b>Позиции:</b> <code>{user_items_count}</code>\n"
             f"   • <b>Сумма в ¥:</b> <code>{sum_cny_str}</code>\n"
             f"   • <b>Сумма в $:</b> <code>{sum_usd_str}</code> <i>курс <code>{rate_str}</code></i>\n"
         )
@@ -333,18 +315,21 @@ class ShipmentsHandler:
         await call.message.delete()
 
         cargo_id = callback_data.id
-        item_id = callback_data.item_id
-        user_id = call.from_user.id
+        item_id  = callback_data.item_id
+        user_id  = call.from_user.id
 
-        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
-        item = await self.cargo_service.items.get(item_id=item_id)
-        user_data = await self.users.get_user(user_id=user_id)
-        rate = user_data.get('rate')
+        # получаем полную инфу по товару из сервиса
+        info = await self.cargo_service.get_item_detailed_info(
+            cargo_id=cargo_id,
+            item_id=item_id,
+        )
+        if not info:
+            return await call.answer("❌ Товар или посылка не найдены", show_alert=True)
 
-        if not cargo or not item:
-            await call.answer("❌ Товар или посылка не найдены", show_alert=True)
-            return
+        cargo = info["cargo"]
+        item  = info["item"]
 
+        # защита от просмотра чужих товаров в общей посылке
         if cargo["scope"] == "shared" and item["user_id"] != user_id:
             await call.answer("⛔️ Это не ваш товар.", show_alert=True)
             fake_cb = ShipmentFlowCallback(action="list_items", id=cargo_id, page=1)
@@ -353,18 +338,65 @@ class ShipmentsHandler:
 
         can_edit = (cargo.get("status") == "open") and (item["user_id"] == user_id)
 
+        # достаём уже посчитанные значения
+        qty  = info["quantity"]
+        rate = info["rate"]
+        price_usd = info["price_usd_per_unit"]
+        price_tot = info["price_usd_total"]
+
+        delivery_cn_msk = info["delivery_cn_msk_usd"]
+        delivery_msk_by = info["delivery_msk_by_usd"]
+        delivery_total = info["delivery_total_usd"]
+        delivery_per = info["delivery_per_unit_usd"]
+
+        final_per_unit = info["final_per_unit_usd"]
+        final_total = info["final_total_usd"]
+
+        weight_single = info["weight_kg_single"]
+        weight_total = info["weight_kg_total"]
+
+        item_id_str = item["id"]
+
+        total_block1 = ""
+        if qty > 1:
+            total_block1 = f"   • за {qty} шт: <code>{price_tot:.2f}$</code>\n"
+
+        total_block2 = ""
+        if qty > 1:
+            total_block2 = f"   • Всего доставки (за все шт): <code>{delivery_total:.2f}$</code>\n"
+
+        total_block3 = ""
+        if qty > 1:
+            total_block3 = f"   • за {qty} шт: <code>{final_total:.2f}$</code>\n"
+
         text = (
-            f"🛍 <b>{item['title']}</b>\n\n"
-            f"💰 Цена: <code>{(item['price'] * rate * item['quantity']):.2f}$</code>\n"
-            f"📦 Количество: <code>{item['quantity']}</code>\n"
-            f"⚖️ Вес: <code>{item['weight_kg']} кг</code>\n"
+            f"🛍 <b>{item['title']}</b> [ID: <code>{item_id_str}</code>]\n\n"
+            f"💱 <b>Курс:</b> <code>{rate.normalize()}</code>\n"
+            f"📦 Количество: <code>{qty}</code>\n"
+            f"⚖️ Вес за 1 шт: <code>{weight_single} кг</code>\n"
+            f"⚖️ Вес всего: <code>{weight_total} кг</code>\n"
+            f"\n"
+            f"💵 <b>Цена товара:</b>\n"
+            f"   • за 1 шт: <code>{price_usd:.2f}$</code>\n"
+            f"{total_block1}"
+            f"\n"
+            f"🚚 <b>Доставка:</b>\n"
+            f"   • CN→MSK: <code>{delivery_cn_msk:.2f}$</code>\n"
+            f"   • MSK→BY: <code>{delivery_msk_by:.2f}$</code>\n"
+            f"   • Доставка за 1 шт: <code>{delivery_per:.2f}$</code>\n"
+            f"{total_block2}"
+            f"\n"
+            f"🧮 <b>Итоговая цена:</b>\n"
+            f"   • за 1 шт: <code>{final_per_unit:.2f}$</code>\n"
+            f"   • за {qty} шт: <code>{final_total:.2f}$</code>\n"
+            f"{total_block3}"
+            f"\n"
         )
+
         if item.get("color"):
             text += f"🎨 Цвет: <code>{item['color']}</code>\n"
         if item.get("size"):
             text += f"📏 Размер: <code>{item['size']}</code>\n"
-        if item.get("options"):
-            text += f"⚙️ Опции: <code>{item['options']}</code>\n"
 
         kb = ShipmentsKB.item_view(cargo_id=cargo_id, item_id=item_id, can_edit=can_edit)
 
