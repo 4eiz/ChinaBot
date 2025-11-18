@@ -388,7 +388,6 @@ class ShipmentsHandler:
             f"\n"
             f"🧮 <b>Итоговая цена:</b>\n"
             f"   • за 1 шт: <code>{final_per_unit:.2f}$</code>\n"
-            f"   • за {qty} шт: <code>{final_total:.2f}$</code>\n"
             f"{total_block3}"
             f"\n"
         )
