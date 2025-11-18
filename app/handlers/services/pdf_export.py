@@ -2,6 +2,7 @@ import os
 import html
 from io import BytesIO
 from typing import List, Dict, Optional
+
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, Flowable
 )
@@ -14,7 +15,6 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 
-
 class PDFExportService:
     """Сервис генерации PDF для посылки и её товаров — iOS-стиль + PNG-эмодзи."""
 
@@ -22,8 +22,10 @@ class PDFExportService:
         self._register_fonts_and_styles()
         self.icons_path = os.path.join("media", "IOSEmoji")
 
+    # ================= ШРИФТЫ и СТИЛИ =================
+
     def _register_fonts_and_styles(self):
-        """Регистрирует шрифты и создаёт ParagraphStyle через цикл."""
+        """Регистрирует шрифты и создаёт ParagraphStyle."""
         fonts = {
             "iOS": ("SFPro", os.path.join("media", "fonts", "SF-Pro-Display-Regular.ttf")),
             "iOSSemiBold": ("SFPro-SemiBold", os.path.join("media", "fonts", "SF-Pro-Display-Semibold.ttf")),
@@ -54,7 +56,7 @@ class PDFExportService:
                 fontName=registered["iOS"],
                 fontSize=9,
                 leading=12,
-                textColor=colors.HexColor("#666666"),
+                textColor=colors.HexColor("#000000"),
                 spaceAfter=4,
             ))
         if "iOSTitle" not in self.styles:
@@ -66,66 +68,7 @@ class PDFExportService:
                 spaceAfter=12,
             ))
 
-        self._ensure_cjk_styles() 
-
-    def _ensure_cjk_styles(self):
-        """
-        Регистрируем fallback CJK-шрифт (если есть) и создаём стили iOSCJK / iOSCJKSmall.
-        Если шрифта нет — стили всё равно создаём, но с базовым шрифтом и wordWrap='CJK'.
-        """
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-
-        candidates = [
-            ("NotoSansSC-Regular", os.path.join("media", "fonts", "NotoSansSC-Regular.otf")),
-            ("NotoSansCJKsc-Regular", os.path.join("media", "fonts", "NotoSansCJKsc-Regular.otf")),
-            ("DejaVuSans", os.path.join("media", "fonts", "DejaVuSans.ttf")),
-        ]
-        fallback = None
-        for name, path in candidates:
-            if os.path.exists(path):
-                try:
-                    pdfmetrics.registerFont(TTFont(name, path))
-                    fallback = name
-                    break
-                except Exception:
-                    pass
-
-        base_font = self.styles["iOS"].fontName
-
-        def add_style(name, font_name, size, leading, color=None):
-            if name not in self.styles.byName:
-                self.styles.add(ParagraphStyle(
-                    name=name,
-                    fontName=font_name,
-                    fontSize=size,
-                    leading=leading,
-                    wordWrap="CJK",
-                    textColor=(color or colors.black),
-                    spaceAfter=6 if size >= 11 else 4,
-                ))
-
-        add_style("iOSCJK",       fallback or base_font, 11, 14)
-        add_style("iOSCJKSmall",  fallback or base_font,  9, 12, colors.HexColor("#333333"))
-
-
-    def _icon(self, name: str, size: int = 16):
-        """Вставка PNG-эмодзи из media/IOSEmoji."""
-        path = os.path.join(self.icons_path, name)
-        if os.path.exists(path):
-            return Image(path, width=size, height=size)
-        return ""
-
-    # ========= НОВОЕ: утилита миниатюры из bytes =========
-    def _thumb_from_bytes(self, img_bytes: bytes, *, size: int = 48) -> Flowable | str:
-        try:
-            img = Image(BytesIO(img_bytes))
-            img._restrictSize(size, size)
-            return img
-        except Exception:
-            return ""
-
-    # ========= НОВОЕ: общий отчёт с двумя плечами =========
+        self._ensure_cjk_styles()
 
     def _ensure_cjk_styles(self):
         """
@@ -134,7 +77,6 @@ class PDFExportService:
         2) Встроенный CID-шрифт ReportLab: STSong-Light (китайский)
         3) В крайнем случае — базовый шрифт, но с wordWrap='CJK'
         """
-
         fallback = None
 
         # 1) Пытаемся найти локальные файлы
@@ -158,7 +100,7 @@ class PDFExportService:
                 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
                 fallback = "STSong-Light"
             except Exception:
-                fallback = None  # пойдём на базовый
+                fallback = None
 
         base_font = self.styles["iOS"].fontName
 
@@ -175,10 +117,107 @@ class PDFExportService:
                 ))
 
         add_style("iOSCJK",      fallback or base_font, 11, 14)
-        add_style("iOSCJKSmall", fallback or base_font,  9, 12, colors.HexColor("#333333"))
+        add_style("iOSCJKSmall", fallback or base_font, 9, 12, colors.HexColor("#333333"))
+
+    # ================= УТИЛИТЫ =================
+
+    def _icon(self, name: str, size: int = 16):
+        """Вставка PNG-эмодзи из media/IOSEmoji."""
+        path = os.path.join(self.icons_path, name)
+        if os.path.exists(path):
+            return Image(path, width=size, height=size)
+        return ""
+
+    def _thumb_from_bytes(self, img_bytes: bytes, *, size: int = 48) -> Flowable | str:
+        """Миниатюра изображения из bytes."""
+        try:
+            img = Image(BytesIO(img_bytes))
+            img._restrictSize(size, size)
+            return img
+        except Exception:
+            return ""
+
+    def _render_title_block(self, item: dict) -> Paragraph:
+        """
+        Название товара в одном столбце:
+        - строка 1: Название (красивый базовый шрифт)
+        - строка 2+: [ID], Цвет: <CJK>, Размер: <CJK>
+        Шрифт CJK используется ТОЛЬКО для значений цвета/размера.
+        """
+        base_style = self.styles["iOS"]
+        base_font = base_style.fontName
+        cjk_font = self.styles["iOSCJK"].fontName
+
+        title = html.escape(str(item.get("title") or "—"))
+
+        # первая строка: название красивым шрифтом
+        html_parts = [f"<font name='{base_font}'>{title}</font>"]
+
+        sub_lines = []
+
+        # ID — обычным шрифтом
+        if item.get("id"):
+            sub_lines.append(f"[ID: {item['id']}]")
+
+        # Цвет: значение цвет CJK-шрифтом
+        if item.get("color"):
+            color_val = html.escape(str(item["color"]))
+            sub_lines.append(
+                f"Цвет: <font name='{cjk_font}'>{color_val}</font>"
+            )
+
+        # Размер: значение размер CJK-шрифтом
+        if item.get("size"):
+            size_val = html.escape(str(item["size"]))
+            sub_lines.append(
+                f"Размер: <font name='{cjk_font}'>{size_val}</font>"
+            )
+
+        if sub_lines:
+            html_parts.append(
+                "<br/><font size='8' color='#171717'>" +
+                "<br/>".join(sub_lines) +
+                "</font>"
+            )
+
+        html_full = "".join(html_parts)
+        # ВАЖНО: стиль — обычный iOS, чтобы не растягивало кириллицу/латиницу
+        return Paragraph(html_full, base_style)
+
+    def _render_price_block(self, item: dict) -> Paragraph:
+        """
+        Цена в одном столбце, три строки:
+        - товар/шт
+        - дост./шт
+        - итого за N шт
+        Используем нормальный iOS-шрифт, CJK тут не нужен.
+        """
+        from decimal import Decimal
+
+        try:
+            qty = Decimal(str(item.get("quantity") or 1))
+
+            # поддерживаем оба варианта ключей: goods_usd_per_unit и price_usd_per_unit
+            g_val = item.get("goods_usd_per_unit", item.get("price_usd_per_unit"))
+            d_val = item.get("delivery_per_unit_usd")
+            total_val = item.get("final_total_usd")
+
+            g = Decimal(str(g_val))
+            d = Decimal(str(d_val))
+            total = Decimal(str(total_val))
+        except Exception:
+            return Paragraph("-", self.styles["iOS"])
+
+        html_price = (
+            f"товар/шт: {g:.2f}$<br/>"
+            f"дост./шт: {d:.2f}$<br/>"
+            f"<b>итого за {qty} шт: {total:.2f}$</b>"
+        )
+        # ТУТ специально используем iOS, чтобы текст был «красивый» и не расползался
+        return Paragraph(html_price, self.styles["iOS"])
 
 
-    # ========= НОВОЕ: пользовательский отчёт «мои товары» =========
+    # ================== ЮЗЕРСКИЙ ОТЧЁТ «МОИ ТОВАРЫ» ==================
 
     def generate_user_cart_pdf(
         self,
@@ -194,11 +233,11 @@ class PDFExportService:
         Юзерский отчёт по товарам в посылке.
 
         items ДОЛЖНЫ уже содержать:
-          - price_usd_per_unit
+          - price_usd_per_unit / goods_usd_per_unit
           - delivery_per_unit_usd
           - final_total_usd
-        которые посчитаны в CargoService (get_item_detailed_info).
-        Здесь — только отображение.
+
+        Все расчёты выполняются в CargoService, здесь только отображение.
         """
         from decimal import Decimal
 
@@ -230,7 +269,7 @@ class PDFExportService:
             f"Доставка: <b>{total_delivery_usd:.2f}$</b><br/>"
             f"Итого к оплате: <b>{total_due_usd:.2f}$</b>"
         )
-        elements.append(Paragraph(summary_text, self.styles["iOS"]))
+        elements.append(Paragraph(summary_text, self.styles["iOSCJK"]))
         elements.append(Spacer(1, 14))
 
         # ---- Таблица товаров ----
@@ -244,76 +283,22 @@ class PDFExportService:
             if item_id in photo_map and photo_map[item_id]:
                 thumb = self._thumb_from_bytes(photo_map[item_id], size=54)
 
-            # --- Название + [ID] + цвет/размер ---
-            base_title = html.escape(str(item.get("title") or "—"))
-            extra_lines: list[str] = []
-
-            if item_id is not None:
-                extra_lines.append(f"[ID: {item_id}]")
-
-            color = item.get("color")
-            if color:
-                extra_lines.append(f"Цвет: {html.escape(str(color))}")
-
-            size = item.get("size")
-            if size:
-                extra_lines.append(f"Размер: {html.escape(str(size))}")
-
-            if extra_lines:
-                title_html = (
-                    base_title
-                    + "<br/><font size=8>"
-                    + "<br/>".join(extra_lines)
-                    + "</font>"
-                )
-            else:
-                title_html = base_title
-
-            title_par = Paragraph(title_html, self.styles["iOS"])
+            # --- Название + [ID] + цвет/размер (одна колонка) ---
+            title_par = self._render_title_block(item)
 
             # --- URL ---
             url_raw = item.get("source_url") or "-"
             if url_raw and url_raw not in ("-", ""):
                 esc = html.escape(url_raw)
-                url_par = Paragraph(f'<link href="{esc}">{esc}</link>', self.styles["iOS"])
+                url_par = Paragraph(f'<link href="{esc}">{esc}</link>', self.styles["iOSCJKSmall"])
             else:
-                url_par = Paragraph("-", self.styles["iOS"])
+                url_par = Paragraph("-", self.styles["iOSCJKSmall"])
 
             # --- Количество ---
             qty = Decimal(str(item.get("quantity") or 1))
 
             # --- Цена: 3 строки (товар/шт, доставка/шт, итог за все) ---
-            goods_per = item.get("price_usd_per_unit")
-            delivery_per = item.get("delivery_per_unit_usd")
-            final_total = item.get("final_total_usd")
-
-            if goods_per is not None and delivery_per is not None and final_total is not None:
-                try:
-                    goods_per_dec = Decimal(str(goods_per))
-                    delivery_per_dec = Decimal(str(delivery_per))
-                    final_total_dec = Decimal(str(final_total))
-
-                    final_per_unit = (goods_per_dec + delivery_per_dec).quantize(Decimal("0.01"))
-
-                    price_lines = [
-                        f"товар/шт: {goods_per_dec:.2f}$",
-                        f"доставка/шт: {delivery_per_dec:.2f}$",
-                        f"итого за {qty} шт: {final_total_dec:.2f}$",
-                    ]
-                    price_cell = Paragraph("<br/>".join(price_lines), self.styles["iOS"])
-                except Exception:
-                    price_cell = Paragraph("-", self.styles["iOS"])
-            else:
-                # fallback на старую логику, если вдруг чего-то нет
-                rate = user.get("rate")
-                if rate:
-                    try:
-                        price_usd = (float(item.get("price", 0)) * float(rate) * int(qty))
-                        price_cell = Paragraph(f"{price_usd:.2f}$", self.styles["iOS"])
-                    except Exception:
-                        price_cell = Paragraph("-", self.styles["iOS"])
-                else:
-                    price_cell = Paragraph("-", self.styles["iOS"])
+            price_cell = self._render_price_block(item)
 
             # --- Вес ---
             weight_val = item.get("weight_kg", 0)
@@ -333,26 +318,30 @@ class PDFExportService:
             ]
             data.append(row)
 
-        table = Table(data, colWidths=[26, 56, 200, 40, 90, 60, 118])
+        table = Table(data, colWidths=[20, 50, 220, 40, 95, 55, 120])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#007AFF")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("FONTNAME", (0, 0), (-1, -1), self.styles["iOS"].fontName),
+            ("FONTNAME", (0, 0), (-1, 0), self.styles["iOSSemiBold"].fontName),
             ("FONTSIZE", (0, 0), (-1, 0), 9),
             ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
             ("ALIGN", (0, 1), (0, -1), "RIGHT"),   # #
             ("ALIGN", (3, 1), (5, -1), "RIGHT"),   # qty / price / weight
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 1), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
         ]))
         elements.append(table)
 
         doc.build(elements)
         return file_path
 
-    # ========= НОВОЕ: админский отчёт =========
+    # ================== АДМИНСКИЙ ОТЧЁТ ПО ПОСЫЛКЕ ==================
 
     def generate_admin_cargo_pdf(
         self,
@@ -388,7 +377,7 @@ class PDFExportService:
                 Paragraph(
                     f'<font name="{self.styles["iOSSemiBold"].fontName}">{label}:</font> '
                     f'<font name="{self.styles["iOS"].fontName}">{value}</font>',
-                    self.styles["iOS"]
+                    self.styles["iOSCJK"]
                 )
             ]
 
@@ -452,8 +441,8 @@ class PDFExportService:
             adv = float(r.get("advance_usd", 0))
 
             # исходные агрегаты
-            total_due_raw  = float(r.get("total_due_usd", 0))                 # долг после авансов/прочего
-            total_over_raw = float(r.get("total_overpay_usd", r.get("to_refund_usd", 0)))  # чистая переплата
+            total_due_raw  = float(r.get("total_due_usd", 0))
+            total_over_raw = float(r.get("total_overpay_usd", r.get("to_refund_usd", 0)))
 
             # взаимозачёт
             net_due = round(max(total_due_raw - total_over_raw, 0.0), 2)
@@ -470,17 +459,17 @@ class PDFExportService:
             goods_cell = Paragraph(
                 f'<font name="{self.styles["iOS"].fontName}">{goods_due:.2f}</font>'
                 f'<br/><font size=8 color="#666" name="{self.styles["iOSSemiBold"].fontName}">опл. {goods_paid:.2f}</font>',
-                self.styles["iOS"]
+                self.styles["iOSCJK"]
             )
             msk_cell = Paragraph(
                 f'<font name="{self.styles["iOS"].fontName}">{msk_due:.2f}</font>'
                 f'<br/><font size=8 color="#666" name="{self.styles["iOSSemiBold"].fontName}">опл. {msk_paid:.2f}</font>',
-                self.styles["iOS"]
+                self.styles["iOSCJK"]
             )
             by_cell = Paragraph(
                 f'<font name="{self.styles["iOS"].fontName}">{by_due:.2f}</font>'
                 f'<br/><font size=8 color="#666" name="{self.styles["iOSSemiBold"].fontName}">опл. {by_paid:.2f}</font>',
-                self.styles["iOS"]
+                self.styles["iOSCJK"]
             )
 
             table_data.append([
@@ -491,21 +480,21 @@ class PDFExportService:
                 f"{net_due:.2f}"    if net_due    > 0 else "—",
             ])
 
-        # ---- ИТОГО (по чистым значениям) ----
+        # ---- ИТОГО ----
         total_goods_cell = Paragraph(
             f'<b>{sum_goods_due:.2f}</b>'
             f'<br/><font size=8 color="#666">опл. {sum_goods_paid:.2f}</font>',
-            self.styles["iOS"]
+            self.styles["iOSCJK"]
         )
         total_msk_cell = Paragraph(
             f'<b>{sum_msk_due:.2f}</b>'
             f'<br/><font size=8 color="#666">опл. {sum_msk_paid:.2f}</font>',
-            self.styles["iOS"]
+            self.styles["iOSCJK"]
         )
         total_by_cell = Paragraph(
             f'<b>{sum_by_due:.2f}</b>'
             f'<br/><font size=8 color="#666">опл. {sum_by_paid:.2f}</font>',
-            self.styles["iOS"]
+            self.styles["iOSCJK"]
         )
 
         table_data.append([
@@ -550,26 +539,28 @@ class PDFExportService:
         doc.build(elements)
         return file_path
 
+    # ================== АДМИНСКИЙ ЭКСПОРТ ВСЕХ ТОВАРОВ ==================
 
     def generate_cargo_items_pdf(
         self,
-        *_,
+        *,
         file_path: str,
         cargo: dict,
         items: list[dict],
         photos: Optional[dict[int, bytes]] = None,
     ) -> str:
         """
-        Экспорт всех товаров посылки (landscape A4) с фото, цветом и размером.
+        Экспорт всех товаров посылки (landscape A4).
 
-        ВАЖНО:
-        - Все суммы/курсы считаются в CargoService.get_cargo_info.
-        - Здесь только отображение:
-            • price_usd берём из item["price_usd"] (Decimal/float/str)
-            • в первой колонке: «№ [<b>ID</b>]».
+        items ДОЛЖНЫ уже содержать поля:
+          - goods_usd_per_unit
+          - delivery_per_unit_usd
+          - final_total_usd
+
+        Все расчёты выполняются в CargoService.get_admin_items_export_payload.
+        Здесь — только отображение.
         """
-
-        from reportlab.lib.units import cm
+        from decimal import Decimal
 
         os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
 
@@ -592,7 +583,8 @@ class PDFExportService:
         ))
         elements.append(Spacer(1, 0.3 * cm))
 
-        head = ["#", "Фото", "Название", "Цвет", "Размер", "Кол-во", "Вес (кг)", "Цена $", "Владелец", "Ссылка"]
+        # Упрощаем таблицу: название+ID+цвет+размер в одной колонке
+        head = ["#", "Фото", "Товар", "Кол-во", "Вес (кг)", "Цена $", "Владелец", "Ссылка"]
         data: list[list] = [head]
 
         photos = photos or {}
@@ -600,67 +592,61 @@ class PDFExportService:
         for idx, it in enumerate(items, start=1):
             item_id = it.get("id", "-")
 
-            # ---- № + [ID] жирный (одна строка)
+            # ---- № + [ID] в одной строке ----
             idx_cell = Paragraph(
                 f"{idx} [<b>{html.escape(str(item_id))}</b>]",
-                self.styles["iOS"]
+                self.styles["iOSCJK"]
             )
 
-            # ---- миниатюра
+            # ---- миниатюра ----
             thumb = ""
             if it.get("_photo_bytes"):
                 thumb = self._thumb_from_bytes(it["_photo_bytes"], size=56)
             elif photos and item_id in photos:
                 thumb = self._thumb_from_bytes(photos[item_id], size=56)
 
-            # ---- поля товара
-            title = Paragraph(html.escape(it.get("title", "—")), self.styles["iOS"])
-            color = Paragraph(html.escape(str(it.get("color") or "—")), self.styles["iOSCJK"])
-            size  = Paragraph(html.escape(str(it.get("size") or "—")), self.styles["iOSCJK"])
+            # ---- Товар (название + ID + цвет + размер) ----
+            title_par = self._render_title_block(it)
 
-            qty    = str(it.get("quantity", 0))
-            weight = str(it.get("weight_kg", 0))
+            # ---- Количество / вес ----
+            qty = Decimal(str(it.get("quantity") or 1))
+            weight_val = it.get("weight_kg", 0)
+            try:
+                weight = f"{float(weight_val):.3f}"
+            except Exception:
+                weight = str(weight_val)
 
-            # ---- цена в $, уже посчитанная в CargoService
-            raw_price_usd = it.get("price_usd")
-            if raw_price_usd is None:
-                price_usd = "-"
-            else:
-                try:
-                    price_usd = f"{float(raw_price_usd):.2f}"
-                except Exception:
-                    price_usd = str(raw_price_usd)
+            # ---- Цена: 3 строки ----
+            price_cell = self._render_price_block(it)
 
-            # ---- владелец
+            # ---- владелец ----
             fio = " ".join(filter(None, [it.get("name"), it.get("surname")])) or "—"
             phone = it.get("phone_number") or "—"
             owner = Paragraph(
                 f"<b>ID:</b> {it.get('user_id', '—')}<br/>{html.escape(fio)}<br/>{html.escape(phone)}",
-                self.styles["iOS"]
+                self.styles["iOSCaption"]
             )
 
-            # ---- ссылка
+            # ---- ссылка ----
             url_raw = it.get("source_url") or "-"
             if url_raw and url_raw not in ("", "-"):
                 esc = html.escape(url_raw)
-                link = Paragraph(f'<link href="{esc}">{esc}</link>', self.styles["iOS"])
+                link = Paragraph(f'<link href="{esc}">{esc}</link>', self.styles["iOSCaption"])
             else:
-                link = Paragraph("-", self.styles["iOS"])
+                link = Paragraph("-", self.styles["iOSCaption"])
 
-            data.append([idx_cell, thumb, title, color, size, qty, weight, price_usd, owner, link])
+            data.append([idx_cell, thumb, title_par, str(qty), weight, price_cell, owner, link])
 
-        # ширины колонок (чуть расширяем № + [ID], чтобы не рвало)
+        # ширины колонок
         colWidths = [
             1.8 * cm,  # № + [ID]
             2.0 * cm,  # Фото
-            6.0 * cm,  # Название
-            2.3 * cm,  # Цвет
-            2.3 * cm,  # Размер
-            1.3 * cm,  # Кол-во
-            1.8 * cm,  # Вес
-            1.8 * cm,  # Цена $
-            4.6 * cm,  # Владелец
-            4.6 * cm,  # Ссылка
+            7.5 * cm,  # Товар (название+ID+цвет+размер)
+            1.5 * cm,  # Кол-во
+            2.2 * cm,  # Вес
+            4.0 * cm,  # Цена $ (3 строки)
+            5.0 * cm,  # Владелец
+            5.0 * cm,  # Ссылка
         ]
 
         table = Table(data, colWidths=colWidths, repeatRows=1)
@@ -678,7 +664,7 @@ class PDFExportService:
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
 
             ("ALIGN", (0, 1), (0, -1), "LEFT"),    # № + [ID]
-            ("ALIGN", (5, 1), (7, -1), "RIGHT"),   # qty / вес / цена
+            ("ALIGN", (3, 1), (5, -1), "RIGHT"),   # qty / вес / цена
 
             ("LEFTPADDING", (0, 0), (-1, -1), 3),
             ("RIGHTPADDING", (0, 0), (-1, -1), 3),

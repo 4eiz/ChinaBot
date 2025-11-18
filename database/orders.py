@@ -579,23 +579,6 @@ class ItemsDB:
         rows = await self.conn.fetch("SELECT DISTINCT user_id FROM items WHERE cargo_id=$1", cargo_id)
         return [int(r['user_id']) for r in rows]
     
-    async def list_with_owner_by_cargo(self, *, cargo_id: int) -> list[dict]:
-        rows = await self.conn.fetch(
-            """
-            SELECT i.*,
-                t.name AS item_type_name,
-                u.name, u.surname, u.phone_number,
-                u.rate AS user_rate            -- ← ДОБАВЬ ЭТО
-            FROM items i
-            LEFT JOIN cargo_types t ON t.id = i.item_type_id
-            LEFT JOIN users u ON u.id = i.user_id
-            WHERE i.cargo_id=$1
-            ORDER BY i.id
-            """ ,
-            cargo_id
-        )
-        return [dict(r) for r in rows]
-    
     async def sum_cny_for_user_in_cargo(self, *, cargo_id: int, user_id: int) -> Decimal:
         """
         Сумма price * quantity в юанях по конкретному пользователю в указанной посылке.
@@ -735,7 +718,9 @@ class CargoService:
         )
 
     async def cargo_items_with_owner(self, *, cargo_id: int) -> list[dict]:
-        return await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+        data = await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+        # print(data)
+        return data
 
     async def compute_pricing_two_legs(self, *, cargo_id: int) -> dict:
         """
@@ -1111,7 +1096,7 @@ class CargoService:
 
         # --- итоговая цена ---
         final_per_unit = (price_usd_per_unit + delivery_per_unit).quantize(Decimal("0.01"), ROUND_HALF_UP)
-        final_total    = (final_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        final_total = (final_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
         return {
             "cargo": cargo,
@@ -1120,23 +1105,119 @@ class CargoService:
 
             "price_cny_per_unit": price_cny,
             "price_usd_per_unit": price_usd_per_unit,
-            "price_usd_total":    price_usd_total,
+            "price_usd_total":  price_usd_total,
             "rate": rate,
             "quantity": qty,
 
             "weight_kg_single": weight_kg_single,
-            "weight_kg_total":  weight_kg_total,
+            "weight_kg_total": weight_kg_total,
 
-            "delivery_cn_msk_usd":    delivery_cn_msk,
-            "delivery_msk_by_usd":    delivery_msk_by,
-            "delivery_total_usd":     delivery_total,
-            "delivery_per_unit_usd":  delivery_per_unit,
+            "delivery_cn_msk_usd": delivery_cn_msk,
+            "delivery_msk_by_usd": delivery_msk_by,
+            "delivery_total_usd": delivery_total,
+            "delivery_per_unit_usd": delivery_per_unit,
 
             "final_per_unit_usd": final_per_unit,
-            "final_total_usd":    final_total,
+            "final_total_usd": final_total,
         }
 
+    async def get_admin_items_export_payload(
+        self,
+        *,
+        cargo_id: int,
+    ) -> dict | None:
+        """
+        Готовый payload для админского PDF по товарам посылки.
 
+        Возвращает:
+        {
+          "cargo": {...},
+          "items": [  # каждый товар уже с готовыми денежными полями
+             {
+               ... исходные поля items + owner ...,
+               "goods_usd_per_unit": Decimal,
+               "delivery_per_unit_usd": Decimal,
+               "final_total_usd": Decimal,
+             },
+             ...
+          ]
+        }
+
+        Вся математика тут, PDF только подставляет.
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        cargo = await self.cargos.get(cargo_id=cargo_id)
+        if not cargo:
+            return None
+
+        # тарифы и общая доставка по двум плечам
+        legs = await self.compute_pricing_two_legs(cargo_id=cargo_id)
+
+        # все товары + владелец + user_rate
+        items = await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+
+        # общий вес по посылке (берём из legs, где он уже пересчитан)
+        total_weight_all = Decimal(str(legs.get("total_weight_kg") or 0))
+        if total_weight_all <= 0:
+            # запасной вариант: считаем из товаров
+            total_weight_all = Decimal("0")
+            for it in items:
+                qty = Decimal(str(it.get("quantity") or 1))
+                w_single = Decimal(str(it.get("weight_kg") or 0))
+                total_weight_all += (w_single * qty)
+            if total_weight_all <= 0:
+                total_weight_all = Decimal("1")
+
+        cn_msk_total_usd = Decimal(str(legs["cn_to_msk"]["delivery_cost_usd"]))
+        msk_by_total_usd = Decimal(str(legs["msk_to_by"]["delivery_cost_usd"]))
+        delivery_total_all = cn_msk_total_usd + msk_by_total_usd
+
+        enriched: list[dict] = []
+
+        for it in items:
+            it = dict(it)  # на всякий случай делаем копию
+
+            price_cny = Decimal(str(it.get("price") or 0))
+            qty       = Decimal(str(it.get("quantity") or 1))
+            w_single  = Decimal(str(it.get("weight_kg") or 0))
+            w_total   = (w_single * qty).quantize(Decimal("0.001"))
+
+            rate = Decimal(str(it.get("user_rate") or DEFAULT_RATE))
+
+            # цена товара в USD
+            goods_usd_per_unit = (price_cny * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            goods_usd_total    = (goods_usd_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+            # доля доставки по весу
+            share = (w_total / total_weight_all) if total_weight_all > 0 else Decimal("0")
+
+            delivery_total_item = (delivery_total_all * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            if qty > 0:
+                delivery_per_unit = (delivery_total_item / qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            else:
+                delivery_per_unit = delivery_total_item
+
+            # итог
+            final_per_unit = (goods_usd_per_unit + delivery_per_unit).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            final_total    = (final_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+            it["goods_usd_per_unit"]    = goods_usd_per_unit
+            it["goods_usd_total"]       = goods_usd_total
+            it["delivery_per_unit_usd"] = delivery_per_unit
+            it["delivery_total_usd"]    = delivery_total_item
+            it["final_per_unit_usd"]    = final_per_unit
+            it["final_total_usd"]       = final_total
+
+            enriched.append(it)
+
+        cargo_out = dict(cargo)
+        cargo_out["items_count"] = len(enriched)
+
+        return {
+            "cargo": cargo_out,
+            "items": enriched,
+        }
 
     
 # ---------------------------------------------------------

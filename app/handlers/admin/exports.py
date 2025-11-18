@@ -2,9 +2,11 @@ from io import BytesIO
 import os
 import tempfile
 from typing import Dict
-from aiogram import types, Router
-from aiogram import F
+
+from aiogram import types, Router, F
+
 from keyboards import AdminFlowCallback
+from database import CargoService
 from app.handlers.services.pdf_export import PDFExportService
 
 
@@ -12,7 +14,7 @@ class AdminExports:
     """
     Экспорт PDF из админки.
     """
-    def __init__(self, *, router: Router, cargo):
+    def __init__(self, *, router: Router, cargo: CargoService):
         self.router = router
         self.cargo = cargo
 
@@ -38,10 +40,17 @@ class AdminExports:
         text = "📄 Админ-отчёт по посылке"
         await call.message.answer_document(document=file, caption=text)
 
+
     async def export_items_pdf(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
         cargo_id = callback_data.id
-        cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
-        items = await self.cargo.cargo_items_with_owner(cargo_id=cargo_id)
+
+        payload = await self.cargo.get_admin_items_export_payload(cargo_id=cargo_id)
+        if not payload:
+            await call.answer("❌ Посылка не найдена", show_alert=True)
+            return
+
+        cargo = payload["cargo"]
+        items = payload["items"]
 
         tmpdir = tempfile.gettempdir()
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_items.pdf")
@@ -53,7 +62,7 @@ class AdminExports:
             file_path=file_path,
             cargo=cargo,
             items=items,
-            photos=photos,  # без фоток; если нужно — можно заюзать collect из AdminShipments
+            photos=photos,
         )
 
         file = types.FSInputFile(file_path)
