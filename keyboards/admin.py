@@ -35,7 +35,8 @@ class AdminKB:
         b = InlineKeyboardBuilder()
         b.button(text="🔖 Статусы", callback_data=AdminFlowCallback(action="status", id=cargo_id).pack())
         b.button(text="👥 Сводка по людям", callback_data=AdminFlowCallback(action="summary", id=cargo_id).pack())
-        b.button(text="📄 Экспорт PDF (админ)", callback_data=AdminFlowCallback(action="export_admin_pdf", id=cargo_id).pack())
+        b.button(text="📊 Excel 352", callback_data=AdminFlowCallback(action="export_excel_352", id=cargo_id).pack())
+        b.button(text="📊 Excel Садовод", callback_data=AdminFlowCallback(action="export_excel_sadovod", id=cargo_id).pack())
         b.button(text="🧾 Экспорт товаров (PDF)", callback_data=AdminFlowCallback(action="export_items_pdf", id=cargo_id).pack())
         
         if cargo.get("status") == "open":
@@ -46,7 +47,7 @@ class AdminKB:
         
         b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="shipments").pack())
         
-        b.adjust(1)
+        b.adjust(1, 1, 2, 1, 1, 1)
         return b.as_markup()
 
     @staticmethod
