@@ -30,6 +30,8 @@ class ShipmentsHandler:
         # регистрируем хендлеры
         self.router.callback_query.register(self.list_shipments, ProfileFlowCallback.filter(F.action == "shipments"))
         self.router.callback_query.register(self.list_shared_shipments, ProfileFlowCallback.filter(F.action == "shipments_shared"))
+        self.router.callback_query.register(self.list_archived_shipments, ProfileFlowCallback.filter(F.action == "shipments_archived"))
+        self.router.callback_query.register(self.list_shipments_paged, ShipmentFlowCallback.filter(F.action.in_(["list_personal", "list_shared", "list_archived"])))
         self.router.callback_query.register(self.create_shipment, ShipmentFlowCallback.filter(F.action == "create"))
         self.router.callback_query.register(self.choose_type, ShipmentFlowCallback.filter(F.action == "type"), ShipmentFSM.type)
         self.router.message.register(self.msg_input_name, ShipmentFSM.name)
@@ -50,43 +52,80 @@ class ShipmentsHandler:
     async def list_shipments(self, call: types.CallbackQuery):
         # ЛИЧНЫЕ
         await call.message.delete()
-
-        user_id = call.from_user.id
-        cargos = await self.cargo_service.cargos.list_by_user(user_id=user_id)  # личные
-
-        text = "📦 Ваши ЛИЧНЫЕ посылки:" if cargos else "У вас пока нет личных посылок."
-        data = [dict(c) for c in cargos]
-        kb = ShipmentsKB.list_shipments(cargos=data, mode="personal")
-        photo = PhotoBank.get_file('CARGOS_IMAGE')
-
-        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+        await self._render_shipments_list(call=call, mode="personal", page=1)
 
 
     async def list_shared_shipments(self, call: types.CallbackQuery):
-        # ОБЩИЕ, где у юзера есть товары
+        # ОБЩИЕ (активные), где у юзера есть товары
         await call.message.delete()
+        await self._render_shipments_list(call=call, mode="shared", page=1)
 
+
+    
+
+    async def list_archived_shipments(self, call: types.CallbackQuery):
+        # АРХИВ: все посылки пользователя со статусом archived
+        await call.message.delete()
+        await self._render_shipments_list(call=call, mode="archived", page=1)
+
+
+    async def list_shipments_paged(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
+        await call.message.delete()
+        action = callback_data.action
+        page = callback_data.page or 1
+        if action == "list_personal":
+            mode = "personal"
+        elif action == "list_shared":
+            mode = "shared"
+        else:
+            mode = "archived"
+        await self._render_shipments_list(call=call, mode=mode, page=page)
+
+
+    async def _render_shipments_list(self, *, call: types.CallbackQuery, mode: str, page: int):
         user_id = call.from_user.id
-        cargos = await self.cargo_service.cargos.list_shared_by_user_participation(user_id=user_id)
-        
-        text = "👥 Общие посылки, где есть ваши товары:" if cargos else "В общих посылках ваших товаров пока нет."
+        limit = 5
+        page = max(1, page)
+        offset = (page - 1) * limit
+
+        if mode == "personal":
+            total = await self.cargo_service.cargos.count_personal_active_by_user(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_personal_active_by_user(user_id=user_id, limit=limit, offset=offset)
+            text = "📦 Ваши ЛИЧНЫЕ посылки:" if total else "У вас пока нет личных посылок."
+        elif mode == "shared":
+            total = await self.cargo_service.cargos.count_shared_active_by_user_participation(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_shared_active_by_user_participation(user_id=user_id, limit=limit, offset=offset)
+            text = "👥 Общие посылки, где есть ваши товары:" if total else "В общих посылках ваших товаров пока нет."
+        else:
+            total = await self.cargo_service.cargos.count_archived_by_user(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_archived_by_user(user_id=user_id, limit=limit, offset=offset)
+            text = "🗄 Ваш архив посылок:" if total else "В архиве пока пусто."
+
+        total_pages = max(1, (total + limit - 1) // limit)
+        page = min(page, total_pages)
+        has_prev = page > 1
+        has_next = page < total_pages
+
         data = [dict(c) for c in cargos]
-        kb = ShipmentsKB.list_shipments(cargos=data, mode="shared")
-
+        kb = ShipmentsKB.list_shipments(
+            cargos=data,
+            mode=mode,
+            page=page,
+            total_pages=total_pages,
+            has_prev=has_prev,
+            has_next=has_next,
+        )
         photo = PhotoBank.get_file('CARGOS_IMAGE')
-
-        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
-
+        await call.message.answer_photo(photo=photo, caption=f"{text} <code>[{page}/{total_pages}]</code>", reply_markup=kb)
 
     async def create_shipment(self, call: types.CallbackQuery, state: FSMContext):
         await call.message.delete()
-        
+
         kb = ShipmentsKB.choose_type()
         text = "Выберите тип посылки:"
 
         await call.message.answer(text=text, reply_markup=kb)
         await state.set_state(ShipmentFSM.type)
-
 
     async def choose_type(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         await call.message.delete()

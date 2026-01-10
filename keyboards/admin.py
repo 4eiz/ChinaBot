@@ -15,17 +15,67 @@ class AdminKB:
         return b.as_markup()
 
     @staticmethod
-    def shipments_list(cargos: list[dict]) -> InlineKeyboardMarkup:
+    def shipments_list(
+        cargos: list[dict],
+        *,
+        tab: str = "shared",  # shared|personal|archived
+        page: int = 1,
+        total_pages: int = 1,
+        has_prev: bool = False,
+        has_next: bool = False,
+    ) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
+
+        # табы
+        b.button(
+            text=("👥 Общие ✅" if tab=="shared" else "👥 Общие"),
+            callback_data=AdminFlowCallback(action="shipments", status="shared", id=1).pack()
+        )
+        b.button(
+            text=("👤 Личные ✅" if tab=="personal" else "👤 Личные"),
+            callback_data=AdminFlowCallback(action="shipments", status="personal", id=1).pack()
+        )
+        b.button(
+            text=("🗄 Архив ✅" if tab=="archived" else "🗄 Архив"),
+            callback_data=AdminFlowCallback(action="shipments", status="archived", id=1).pack()
+        )
+
+        # список
         for c in cargos or []:
             title = c.get("title") or f"#{c['id']}"
             b.button(
                 text=f"📦 #{c['id']} | {title}",
                 callback_data=AdminFlowCallback(action="open", id=c["id"]).pack()
             )
+
+        # пагинация
+        if total_pages > 1:
+            if has_prev:
+                b.button(
+                    text="◀️",
+                    callback_data=AdminFlowCallback(action="shipments", status=tab, id=page-1).pack()
+                )
+            b.button(
+                text=f"{page}/{total_pages}",
+                callback_data=AdminFlowCallback(action="shipments", status=tab, id=page).pack()
+            )
+            if has_next:
+                b.button(
+                    text="▶️",
+                    callback_data=AdminFlowCallback(action="shipments", status=tab, id=page+1).pack()
+                )
+
         b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="menu").pack())
-        b.adjust(1)
+
+        sizes: list[int] = [3]
+        if cargos:
+            sizes += [1] * len(cargos)
+        if total_pages > 1:
+            sizes.append(3 if (has_prev and has_next) else 2 if (has_prev or has_next) else 1)
+        sizes.append(1)
+        b.adjust(*sizes)
         return b.as_markup()
+
 
     @staticmethod
     def shipment_view(cargo: int) -> InlineKeyboardMarkup:

@@ -18,36 +18,72 @@ class ProfileKB:
 
 class ShipmentsKB:
     @staticmethod
-    def list_shipments(cargos: list[dict], mode: str = "personal") -> InlineKeyboardMarkup:
+    def list_shipments(
+        cargos: list[dict],
+        *,
+        mode: str = "personal",  # personal|shared|archived
+        page: int = 1,
+        total_pages: int = 1,
+        has_prev: bool = False,
+        has_next: bool = False,
+    ) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
 
         # табы
-        b.button(text=("📦 Личные ✅" if mode=="personal" else "📦 Личные"),
-                callback_data=ProfileFlowCallback(action="shipments").pack())
-        b.button(text=("👥 Общие ✅" if mode=="shared" else "👥 Общие"),
-                callback_data=ProfileFlowCallback(action="shipments_shared").pack())
+        b.button(
+            text=("📦 Личные ✅" if mode=="personal" else "📦 Личные"),
+            callback_data=ShipmentFlowCallback(action="list_personal", page=1).pack(),
+        )
+        b.button(
+            text=("👥 Общие ✅" if mode=="shared" else "👥 Общие"),
+            callback_data=ShipmentFlowCallback(action="list_shared", page=1).pack(),
+        )
+        b.button(
+            text=("🗄 Архив ✅" if mode=="archived" else "🗄 Архив"),
+            callback_data=ShipmentFlowCallback(action="list_archived", page=1).pack(),
+        )
 
         # список
         if cargos:
             for c in cargos:
                 title = c.get("title") or f"Посылка #{c['id']}"
-                b.button(text=f"📦 {title}", callback_data=ShipmentFlowCallback(action="open", id=c["id"]).pack())
+                b.button(
+                    text=f"📦 {title}",
+                    callback_data=ShipmentFlowCallback(action="open", id=c["id"]).pack(),
+                )
 
-        # создать — только для личных
+        # пагинация (по 5 посылок)
+        if total_pages > 1:
+            if has_prev:
+                b.button(
+                    text="◀️",
+                    callback_data=ShipmentFlowCallback(action=f"list_{mode}", page=page-1).pack(),
+                )
+            b.button(text=f"{page}/{total_pages}", callback_data=ShipmentFlowCallback(action=f"list_{mode}", page=page).pack())
+            if has_next:
+                b.button(
+                    text="▶️",
+                    callback_data=ShipmentFlowCallback(action=f"list_{mode}", page=page+1).pack(),
+                )
+
+        # создать — только для ЛИЧНЫХ (не архив)
         if mode == "personal":
             b.button(text="➕ Создать посылку", callback_data=ShipmentFlowCallback(action="create").pack())
 
         b.button(text="⬅ Назад", callback_data=ProfileFlowCallback(action="back_to_profile").pack())
 
-        # раскладка: табы -> список -> сервисные
-        sizes: list[int] = [2]
+        # раскладка
+        sizes: list[int] = [3]  # tabs
         if cargos:
             sizes += [1] * len(cargos)
+        if total_pages > 1:
+            sizes.append(3 if (has_prev and has_next) else 2 if (has_prev or has_next) else 1)
         if mode == "personal":
             sizes.append(1)
         sizes.append(1)
         b.adjust(*sizes)
         return b.as_markup()
+
 
     @staticmethod
     def choose_type() -> InlineKeyboardMarkup:

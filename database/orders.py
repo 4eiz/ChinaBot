@@ -274,6 +274,132 @@ class CargosDB:
             user_id
         )
         return [dict(r) for r in rows]
+
+    async def list_personal_active_by_user(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        rows = await self.conn.fetch(
+            """
+            SELECT * FROM cargos
+            WHERE scope='personal' AND owner_user_id=$1 AND status <> 'archived'
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_personal_active_by_user(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            "SELECT COUNT(*) FROM cargos WHERE scope='personal' AND owner_user_id=$1 AND status <> 'archived'",
+            user_id
+        )
+
+    async def list_shared_active_by_user_participation(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT c.*
+            FROM cargos c
+            JOIN items i ON i.cargo_id = c.id
+            WHERE c.scope='shared' AND c.status <> 'archived' AND i.user_id=$1
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_shared_active_by_user_participation(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT c.id)
+            FROM cargos c
+            JOIN items i ON i.cargo_id = c.id
+            WHERE c.scope='shared' AND c.status <> 'archived' AND i.user_id=$1
+            """,
+            user_id
+        )
+
+    async def list_archived_by_user(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        """
+        Архив пользователя: все посылки со статусом 'archived', где:
+        - personal: owner_user_id = user_id
+        - shared: есть хотя бы 1 item пользователя
+        """
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT c.*
+            FROM cargos c
+            LEFT JOIN items i ON i.cargo_id = c.id AND i.user_id=$1
+            WHERE c.status='archived'
+              AND (
+                    (c.scope='personal' AND c.owner_user_id=$1)
+                 OR (c.scope='shared' AND i.user_id IS NOT NULL)
+              )
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_archived_by_user(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT c.id)
+            FROM cargos c
+            LEFT JOIN items i ON i.cargo_id = c.id AND i.user_id=$1
+            WHERE c.status='archived'
+              AND (
+                    (c.scope='personal' AND c.owner_user_id=$1)
+                 OR (c.scope='shared' AND i.user_id IS NOT NULL)
+              )
+            """,
+            user_id
+        )
+
+    async def list_admin_filtered(
+        self,
+        *,
+        scope: str | None,
+        archived: bool,
+        limit: int = 5,
+        offset: int = 0,
+    ) -> list[dict]:
+        if archived:
+            where = "status='archived'"
+            args = []
+        else:
+            where = "status <> 'archived'"
+            args = []
+
+        if scope in {'shared', 'personal'}:
+            where += " AND scope=$1"
+            args.append(scope)
+
+        if args:
+            sql = f"SELECT * FROM cargos WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}"
+            rows = await self.conn.fetch(sql, *args, limit, offset)
+        else:
+            sql = f"SELECT * FROM cargos WHERE {where} ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2"
+            rows = await self.conn.fetch(sql, limit, offset)
+
+        return [dict(r) for r in rows]
+
+    async def count_admin_filtered(self, *, scope: str | None, archived: bool) -> int:
+        if archived:
+            where = "status='archived'"
+            args = []
+        else:
+            where = "status <> 'archived'"
+            args = []
+
+        if scope in {'shared', 'personal'}:
+            where += " AND scope=$1"
+            args.append(scope)
+
+        if args:
+            return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}", *args)
+        return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}")
+
     
     async def set_status(self, *, cargo_id: int, status: str) -> None:
         await self.conn.execute(
