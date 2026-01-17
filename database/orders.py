@@ -375,11 +375,17 @@ class CargosDB:
             where += " AND scope=$1"
             args.append(scope)
 
+        select_sql = """
+            SELECT c.*, ct.name AS cargo_type_name
+            FROM cargos c
+            LEFT JOIN cargo_types ct ON ct.id = c.cargo_type_id
+        """.strip()
+
         if args:
-            sql = f"SELECT * FROM cargos WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}"
+            sql = f"{select_sql} WHERE {where} ORDER BY c.created_at DESC, c.id DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}"
             rows = await self.conn.fetch(sql, *args, limit, offset)
         else:
-            sql = f"SELECT * FROM cargos WHERE {where} ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2"
+            sql = f"{select_sql} WHERE {where} ORDER BY c.created_at DESC, c.id DESC LIMIT $1 OFFSET $2"
             rows = await self.conn.fetch(sql, limit, offset)
 
         return [dict(r) for r in rows]

@@ -232,7 +232,11 @@ class ShipmentsHandler:
             f"   • <b>Сумма в $:</b> <code>{sum_usd_str}</code> <i>курс <code>{rate_str}</code></i>\n"
         )
 
-        kb = ShipmentViewKB.main(cargo=cargo)
+        # ВАЖНО: обычные пользователи не могут отправлять ОБЩИЕ посылки
+        is_admin = bool(await self.users.is_admin(call.from_user.id))
+        can_send = not (cargo.get("scope") == "shared" and not is_admin)
+
+        kb = ShipmentViewKB.main(cargo=cargo, can_send=can_send)
         await call.message.answer(text=text, reply_markup=kb)
 
 
@@ -517,6 +521,12 @@ class ShipmentsHandler:
         if not cargo or cargo.get("status") != "open":
             return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
 
+        # 1.1) запрет отправки общей посылки для не-админов
+        if cargo.get("scope") == "shared":
+            is_admin = bool(await self.users.is_admin(call.from_user.id))
+            if not is_admin:
+                return await call.answer("⛔️ Нельзя отправлять общую посылку. Отправку делает администратор.", show_alert=True)
+
         # 2) валидируем наличие товаров (не удаляем сообщение до ответа!)
         await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
@@ -546,6 +556,15 @@ class ShipmentsHandler:
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo or cargo.get("status") != "open":
             return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
+
+        # 1.1) запрет отправки общей посылки для не-админов
+        if cargo.get("scope") == "shared":
+            is_admin = bool(await self.users.is_admin(call.from_user.id))
+            if not is_admin:
+                return await call.answer(
+                    "⛔️ Нельзя отправлять общую посылку. Отправку делает администратор.",
+                    show_alert=True,
+                )
 
         # 2) гарантируем актуальные агрегаты и проверяем, что не пусто
         await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)

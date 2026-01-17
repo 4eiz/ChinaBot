@@ -103,6 +103,7 @@ class AdminShipments:
             return await call.answer(text=text, show_alert=True)
 
         cargo = info["cargo"]
+        cargo_type_name = info.get("cargo_type_name") or "—"
         legs = info["pricing"]
         item_count = info["items_count"]
         user_count = info["users_count"]
@@ -136,6 +137,7 @@ class AdminShipments:
             f"📦 <b>Посылка <code>#{cargo_id}</code></b>\n"
             f"{scope_label}\n"
             f"{owner_line}"
+            f"🏷 Тип: <code>{cargo_type_name}</code>\n"
             f"🔖 Редактирование: <code>{cargo['status']}</code>\n"
             f"💵 Стоимость: <code>{cargo.get('payment_status') or '—'}</code>\n"
             f"⚖️ Вес: <code>{legs['total_weight_kg']} кг</code>\n"

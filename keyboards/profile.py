@@ -224,7 +224,7 @@ class ShipmentsKB:
 
 class ShipmentViewKB:
     @staticmethod
-    def main(cargo: dict) -> InlineKeyboardMarkup:
+    def main(cargo: dict, *, can_send: bool = True) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
         b.button(
             text="🛒 Товары",
@@ -235,8 +235,8 @@ class ShipmentViewKB:
             callback_data=ShipmentFlowCallback(action="export_user_pdf", id=cargo["id"]).pack()
         )
 
-        # кнопка отправки только если статус == open
-        if cargo.get("status") == "open":
+        # кнопка отправки только если статус == open и отправка разрешена
+        if cargo.get("status") == "open" and can_send:
             b.button(
                 text="📨 Отправить посылку",
                 callback_data=ShipmentFlowCallback(action="send_request", id=cargo["id"]).pack()
@@ -249,7 +249,7 @@ class ShipmentViewKB:
 
         # раскладка: товары + экспорт всегда, кнопка отправки (если есть), назад
         sizes = [1, 1]
-        if cargo.get("status") == "open":
+        if cargo.get("status") == "open" and can_send:
             sizes.append(1)
         sizes.append(1)
         b.adjust(*sizes)

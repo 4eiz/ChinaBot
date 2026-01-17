@@ -44,7 +44,8 @@ class AdminKB:
         for c in cargos or []:
             title = c.get("title") or f"#{c['id']}"
             b.button(
-                text=f"📦 #{c['id']} | {title}",
+                # ВАЖНО: текст кнопок не меняем (тип выводим в информации о посылке)
+                text=title,
                 callback_data=AdminFlowCallback(action="open", id=c["id"]).pack()
             )
 
