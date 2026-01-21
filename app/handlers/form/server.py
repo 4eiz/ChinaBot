@@ -31,7 +31,7 @@ class FormServerHandler:
             return
 
         user_id = req["user_id"]
-        old = "📥 Новая заявка"
+        old = "📥 <b>Новая заявка</b>"
 
         if action == "approve":
             await self.requests.update_status(request_id, "approved")
@@ -54,7 +54,7 @@ class FormServerHandler:
             
             # редактируем админское сообщение
             admin_id = call.from_user.id
-            text = call.message.text
+            text = call.message.html_text
             text = f"✅ Заявка <code>#{request_id}</code> принята\nАдмин: <code>{admin_id}</code>" + text.replace(old, '')
             try:
                 await call.message.edit_text(
@@ -80,10 +80,10 @@ class FormServerHandler:
 
         elif action == "reject":
             await self.requests.update_status(request_id, "rejected")
-            text = call.message.text
-            text = text
+
+            text = call.message.html_text
             admin_id = call.from_user.id
-            text = f"<b>❌ Заявка <code>#{request_id}</code> ОТКЛОНЕНА\n\Админ: <code>{user_id}</code>" + text.replace(old, '')
+            text = f"<b>❌ Заявка <code>#{request_id}</code> ОТКЛОНЕНА\nАдмин: <code>{user_id}</code>" + text.replace(old, '')
             try:
                 await call.message.edit_text(
                     text=text,
@@ -91,6 +91,8 @@ class FormServerHandler:
                 )
             except:
                 pass
+
+
             try:
                 text = "<b>❌ Ваша заявка отклонена. Вы можете отправить новую, исправив данные.</b>"
                 await call.bot.send_message(

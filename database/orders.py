@@ -7,6 +7,8 @@ from decimal import Decimal, ROUND_UP, ROUND_HALF_UP
 from collections import defaultdict
 from .users import UsersDB
 
+from config import CLEAR_RATE, DEFAULT_RATE
+
 
 # --------------------------- Cargo Types ---------------------------
 
@@ -45,10 +47,10 @@ class CargoTypesDB:
         if exists:
             return
         defaults = [
-            ('clothes', 'Одежда', Decimal('6.00')),
+            ('clothes', 'Одежда', Decimal('7.50')),
             ('shoes', 'Обувь', Decimal('7.00')),
-            ('household', 'Хозтовары', Decimal('5.00')),
-            ('mixed', 'Смешанный', Decimal('0.00')),
+            ('household', 'Хозтовары', Decimal('6.00')),
+            ('mixed', 'Смешанный', Decimal('7.50')),
         ]
         for code, name, rate in defaults:
             await self.conn.execute(
@@ -215,7 +217,15 @@ class CargosDB:
             'rate_per_kg_usd': float(rate),
             'delivery_cost_usd': float(delivery_cost),
         }
-    
+
+
+    async def set_cargo_type(self, *, cargo_id: int, cargo_type_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE cargos SET cargo_type_id=$2, updated_at=NOW() WHERE id=$1",
+            cargo_id, cargo_type_id
+        )
+
+
     async def get_name_by_id(self, *, cargo_type_id: int) -> Optional[str]:
         row = await self.conn.fetchrow(
             "SELECT name FROM cargo_types WHERE id=$1",
@@ -264,6 +274,138 @@ class CargosDB:
             user_id
         )
         return [dict(r) for r in rows]
+
+    async def list_personal_active_by_user(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        rows = await self.conn.fetch(
+            """
+            SELECT * FROM cargos
+            WHERE scope='personal' AND owner_user_id=$1 AND status <> 'archived'
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_personal_active_by_user(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            "SELECT COUNT(*) FROM cargos WHERE scope='personal' AND owner_user_id=$1 AND status <> 'archived'",
+            user_id
+        )
+
+    async def list_shared_active_by_user_participation(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT c.*
+            FROM cargos c
+            JOIN items i ON i.cargo_id = c.id
+            WHERE c.scope='shared' AND c.status <> 'archived' AND i.user_id=$1
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_shared_active_by_user_participation(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT c.id)
+            FROM cargos c
+            JOIN items i ON i.cargo_id = c.id
+            WHERE c.scope='shared' AND c.status <> 'archived' AND i.user_id=$1
+            """,
+            user_id
+        )
+
+    async def list_archived_by_user(self, *, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+        """
+        Архив пользователя: все посылки со статусом 'archived', где:
+        - personal: owner_user_id = user_id
+        - shared: есть хотя бы 1 item пользователя
+        """
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT c.*
+            FROM cargos c
+            LEFT JOIN items i ON i.cargo_id = c.id AND i.user_id=$1
+            WHERE c.status='archived'
+              AND (
+                    (c.scope='personal' AND c.owner_user_id=$1)
+                 OR (c.scope='shared' AND i.user_id IS NOT NULL)
+              )
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id, limit, offset
+        )
+        return [dict(r) for r in rows]
+
+    async def count_archived_by_user(self, *, user_id: int) -> int:
+        return await self.conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT c.id)
+            FROM cargos c
+            LEFT JOIN items i ON i.cargo_id = c.id AND i.user_id=$1
+            WHERE c.status='archived'
+              AND (
+                    (c.scope='personal' AND c.owner_user_id=$1)
+                 OR (c.scope='shared' AND i.user_id IS NOT NULL)
+              )
+            """,
+            user_id
+        )
+
+    async def list_admin_filtered(
+        self,
+        *,
+        scope: str | None,
+        archived: bool,
+        limit: int = 5,
+        offset: int = 0,
+    ) -> list[dict]:
+        if archived:
+            where = "status='archived'"
+            args = []
+        else:
+            where = "status <> 'archived'"
+            args = []
+
+        if scope in {'shared', 'personal'}:
+            where += " AND scope=$1"
+            args.append(scope)
+
+        select_sql = """
+            SELECT c.*, ct.name AS cargo_type_name
+            FROM cargos c
+            LEFT JOIN cargo_types ct ON ct.id = c.cargo_type_id
+        """.strip()
+
+        if args:
+            sql = f"{select_sql} WHERE {where} ORDER BY c.created_at DESC, c.id DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}"
+            rows = await self.conn.fetch(sql, *args, limit, offset)
+        else:
+            sql = f"{select_sql} WHERE {where} ORDER BY c.created_at DESC, c.id DESC LIMIT $1 OFFSET $2"
+            rows = await self.conn.fetch(sql, limit, offset)
+
+        return [dict(r) for r in rows]
+
+    async def count_admin_filtered(self, *, scope: str | None, archived: bool) -> int:
+        if archived:
+            where = "status='archived'"
+            args = []
+        else:
+            where = "status <> 'archived'"
+            args = []
+
+        if scope in {'shared', 'personal'}:
+            where += " AND scope=$1"
+            args.append(scope)
+
+        if args:
+            return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}", *args)
+        return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}")
+
     
     async def set_status(self, *, cargo_id: int, status: str) -> None:
         await self.conn.execute(
@@ -410,7 +552,7 @@ class ItemsDB:
             if k not in allowed:
                 continue
             if k in {"price", "weight_kg", "cn_domestic_shipping"}:
-                clean[k] = _to_numeric(v)
+                clean[k] = self._to_numeric(v)
             else:
                 clean[k] = v
         if not clean:
@@ -508,7 +650,6 @@ class ItemsDB:
         )
 
 
-
     async def users_in_cargo(self, *, cargo_id: int) -> list[int]:
         """
         Список user_id, у кого есть товары в этой посылке.
@@ -570,34 +711,29 @@ class ItemsDB:
         rows = await self.conn.fetch("SELECT DISTINCT user_id FROM items WHERE cargo_id=$1", cargo_id)
         return [int(r['user_id']) for r in rows]
     
-    async def list_with_owner_by_cargo(self, *, cargo_id: int) -> list[dict]:
-        rows = await self.conn.fetch(
+    async def sum_cny_for_user_in_cargo(self, *, cargo_id: int, user_id: int) -> Decimal:
+        """
+        Сумма price * quantity в юанях по конкретному пользователю в указанной посылке.
+        """
+        value = await self.conn.fetchval(
             """
-            SELECT i.*,
-                t.name AS item_type_name,
-                u.name, u.surname, u.phone_number,
-                u.rate AS user_rate            -- ← ДОБАВЬ ЭТО
-            FROM items i
-            LEFT JOIN cargo_types t ON t.id = i.item_type_id
-            LEFT JOIN users u ON u.id = i.user_id
-            WHERE i.cargo_id=$1
-            ORDER BY i.id
-            """ ,
-            cargo_id
+            SELECT COALESCE(SUM(price * quantity), 0)
+            FROM items
+            WHERE cargo_id=$1 AND user_id=$2
+            """,
+            cargo_id, user_id
         )
-        return [dict(r) for r in rows]
+        return Decimal(str(value or 0))
 
-
-
-def _to_numeric(value) -> Optional[Decimal]:
-    if value is None:
-        return None
-    if isinstance(value, Decimal):
-        return value
-    try:
-        return Decimal(str(value))
-    except Exception:
-        return None
+    def _to_numeric(value) -> Optional[Decimal]:
+        if value is None:
+            return None
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
 
 
 # --------------------------- Service-layer --------------------------
@@ -620,8 +756,8 @@ class CargoService:
         # вызови init у всех таблиц, включая платежи
         await self.cargos.init()
         await self.items.init()
-        paydb = CargoPaymentsDB(conn=self.conn)
-        await paydb.init()
+        await self.cargo_types.init()
+        await self.pay.init()
         # инициализация прочих таблиц как у тебя
 
     async def _resolve_item_type_id(self, item_type_code: str) -> int:
@@ -714,7 +850,9 @@ class CargoService:
         )
 
     async def cargo_items_with_owner(self, *, cargo_id: int) -> list[dict]:
-        return await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+        data = await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+        # print(data)
+        return data
 
     async def compute_pricing_two_legs(self, *, cargo_id: int) -> dict:
         """
@@ -870,6 +1008,348 @@ class CargoService:
 
         return {"cargo": cargo, "legs": legs, "users": rows}
 
+
+    async def get_cargo_info(
+        self,
+        *,
+        cargo_id: int,
+        for_user_id: int | None = None,   # если нужен блок по конкретному юзеру
+    ) -> dict | None:
+        """
+        Возвращает агрегированную инфу по посылке:
+        - cargo, cargo_type_name
+        - pricing (две ноги)
+        - items (с данными владельца), items_count
+        - users_in, users_count
+        - суммы по всем товарам (CNY, USD по курсам юзеров, USD по CLEAR_RATE, profit)
+        - (опционально) блок по конкретному пользователю: сумма в CNY и USD по его курсу
+        """
+        from decimal import Decimal
+
+        # --- сама посылка ---
+        cargo = await self.cargos.get(cargo_id=cargo_id)
+        if not cargo:
+            return None
+
+        # имя типа
+        cargo_type_name = await self.cargo_types.get_name_by_id(
+            cargo_type_id=cargo["cargo_type_id"]
+        )
+
+        # расчёт двух плеч
+        pricing = await self.compute_pricing_two_legs(cargo_id=cargo_id)
+
+        # товары с данными владельца (list_with_owner_by_cargo)
+        items = await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+        items_count = len(items)
+
+        # пользователи в посылке
+        users_in = await self.items.users_in_cargo(cargo_id=cargo_id)
+        users_count = len(users_in)
+
+        # --- общая сумма в CNY по всем товарам ---
+        sum_cny = Decimal("0")
+
+        # одновременно посчитаем price_usd по каждому товару (для экспорта)
+        for it in items:
+            price = Decimal(str(it.get("price") or 0))
+            qty   = Decimal(str(it.get("quantity") or 1))
+            row_sum_cny = price * qty
+            sum_cny += row_sum_cny
+
+            # курс юзера для этой позиции (если есть)
+            rate = it.get("user_rate")
+            if rate is None:
+                it["price_usd"] = None
+            else:
+                try:
+                    rate_dec = Decimal(str(rate))
+                    it["price_usd"] = (row_sum_cny * rate_dec).quantize(Decimal("0.01"))
+                except Exception:
+                    it["price_usd"] = None
+
+        # --- сумма в USD по курсу каждого юзера (агрегатно) ---
+        sum_usd_by_user = Decimal("0")
+        per_user_totals: dict[int, dict] = {}
+
+        for uid in users_in:
+            goods_usd, _ = await self.items.totals_for_user_in_cargo(
+                cargo_id=cargo_id,
+                user_id=uid,
+            )
+            goods_usd = Decimal(str(goods_usd))
+            sum_usd_by_user += goods_usd
+            per_user_totals[uid] = {"goods_usd": goods_usd}
+
+        sum_usd_by_user = sum_usd_by_user.quantize(Decimal("0.01"))
+
+        # --- «честная» сумма в USD по CLEAR_RATE ---
+        clear_rate = Decimal(str(CLEAR_RATE))
+        sum_usd_clear = (sum_cny * clear_rate).quantize(Decimal("0.01"))
+
+        # --- прибыль ---
+        profit = (sum_usd_by_user - sum_usd_clear).quantize(Decimal("0.01"))
+
+        result: dict[str, object] = {
+            "cargo": cargo,
+            "cargo_type_name": cargo_type_name,
+            "pricing": pricing,
+            "items": items,              # ← товары уже с owner-данными и price_usd
+            "items_count": items_count,
+            "users_in": users_in,
+            "users_count": users_count,
+            "sum_cny": sum_cny,
+            "sum_usd_by_user": sum_usd_by_user,
+            "sum_usd_clear": sum_usd_clear,
+            "profit": profit,
+            "per_user_totals": per_user_totals,
+        }
+
+        # --- блок по конкретному пользователю (для профиля) ---
+        if for_user_id is not None:
+            user = await self.users.get_user(for_user_id)
+            rate = Decimal(str((user or {}).get("rate") or DEFAULT_RATE))
+
+            user_items = [it for it in items if it.get("user_id") == for_user_id]
+            user_items_count = len(user_items)
+
+            # агрегат из БД + fallback по item-ам
+            try:
+                sum_cny_user = await self.items.sum_cny_for_user_in_cargo(
+                    cargo_id=cargo_id,
+                    user_id=for_user_id,
+                )
+                sum_cny_user = Decimal(str(sum_cny_user))
+            except Exception:
+                sum_cny_user = Decimal("0")
+                for it in items:
+                    if it.get("user_id") != for_user_id:
+                        continue
+                    price = Decimal(str(it.get("price") or 0))
+                    qty   = Decimal(str(it.get("quantity") or 1))
+                    sum_cny_user += price * qty
+
+            sum_usd_user = (sum_cny_user * rate).quantize(Decimal("0.01"))
+
+            result["current_user"] = {
+                "row": user,
+                "id": for_user_id,
+                "rate": rate,
+                "sum_cny": sum_cny_user,
+                "sum_usd": sum_usd_user,
+                "items_count": user_items_count,
+            }
+
+        return result
+    
+    async def get_cargo_export_payload(
+        self,
+        *,
+        cargo_id: int,
+    ) -> dict | None:
+        """
+        Упрощённый payload именно для экспорта товаров:
+        - cargo (дополнительно прокидываем cargo_type_name)
+        - items (с owner-данными и price_usd)
+        """
+        info = await self.get_cargo_info(cargo_id=cargo_id)
+        if not info:
+            return None
+
+        cargo = dict(info["cargo"])
+        cargo["type_name"] = info.get("cargo_type_name")
+
+        return {
+            "cargo": cargo,
+            "items": info["items"],
+        }
+
+    async def get_item_detailed_info(
+        self,
+        *,
+        cargo_id: int,
+        item_id: int,
+    ) -> dict | None:
+        """
+        Детальная информация по одному товару в посылке:
+        - cargo, item, legs (две доставки)
+        - цена товара (CNY -> USD, за 1 шт и за все)
+        - доставка (CN→MSK и MSK→BY) пропорционально весу этого товара
+        - итоговая цена за 1 шт и за все шт
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        # --- груз и товар ---
+        cargo = await self.cargos.get(cargo_id=cargo_id)
+        if not cargo:
+            return None
+
+        item = await self.items.get(item_id=item_id)
+        if not item or int(item.get("cargo_id") or 0) != int(cargo_id):
+            return None
+
+        # --- тарифы по двум плечам ---
+        legs = await self.compute_pricing_two_legs(cargo_id=cargo_id)
+
+        # --- базовые числа по товару ---
+        price_cny = Decimal(str(item.get("price") or 0))
+        qty       = Decimal(str(item.get("quantity") or 1))
+        weight_kg_single = Decimal(str(item.get("weight_kg") or 0))
+        weight_kg_total  = (weight_kg_single * qty).quantize(Decimal("0.001"))
+
+        # курс берём из владельца товара
+        owner = await self.users.get_user(item["user_id"])
+        rate  = Decimal(str((owner or {}).get("rate") or DEFAULT_RATE))
+
+        # --- цена товара в USD ---
+        price_usd_per_unit = (price_cny * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        price_usd_total    = (price_usd_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+        # --- доля доставки по весу ---
+        total_weight_all = Decimal(str(legs.get("total_weight_kg") or 0))
+        if total_weight_all > 0:
+            share = (weight_kg_total / total_weight_all)
+        else:
+            share = Decimal("0")
+
+        # --- доставка по двум плечам для ЭТОГО товара (за все шт сразу) ---
+        cn_msk_total_usd = Decimal(str(legs["cn_to_msk"]["delivery_cost_usd"]))
+        msk_by_total_usd = Decimal(str(legs["msk_to_by"]["delivery_cost_usd"]))
+
+        delivery_cn_msk = (cn_msk_total_usd * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        delivery_msk_by = (msk_by_total_usd * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        delivery_total  = (delivery_cn_msk + delivery_msk_by).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+        # доставка «за 1 шт» (если qty > 0)
+        if qty > 0:
+            delivery_per_unit = (delivery_total / qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        else:
+            delivery_per_unit = delivery_total
+
+        # --- итоговая цена ---
+        final_per_unit = (price_usd_per_unit + delivery_per_unit).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        final_total = (final_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+        return {
+            "cargo": cargo,
+            "item": item,
+            "legs": legs,
+
+            "price_cny_per_unit": price_cny,
+            "price_usd_per_unit": price_usd_per_unit,
+            "price_usd_total":  price_usd_total,
+            "rate": rate,
+            "quantity": qty,
+
+            "weight_kg_single": weight_kg_single,
+            "weight_kg_total": weight_kg_total,
+
+            "delivery_cn_msk_usd": delivery_cn_msk,
+            "delivery_msk_by_usd": delivery_msk_by,
+            "delivery_total_usd": delivery_total,
+            "delivery_per_unit_usd": delivery_per_unit,
+
+            "final_per_unit_usd": final_per_unit,
+            "final_total_usd": final_total,
+        }
+
+    async def get_admin_items_export_payload(
+        self,
+        *,
+        cargo_id: int,
+    ) -> dict | None:
+        """
+        Готовый payload для админского PDF по товарам посылки.
+
+        Возвращает:
+        {
+          "cargo": {...},
+          "items": [  # каждый товар уже с готовыми денежными полями
+             {
+               ... исходные поля items + owner ...,
+               "goods_usd_per_unit": Decimal,
+               "delivery_per_unit_usd": Decimal,
+               "final_total_usd": Decimal,
+             },
+             ...
+          ]
+        }
+
+        Вся математика тут, PDF только подставляет.
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        cargo = await self.cargos.get(cargo_id=cargo_id)
+        if not cargo:
+            return None
+
+        # тарифы и общая доставка по двум плечам
+        legs = await self.compute_pricing_two_legs(cargo_id=cargo_id)
+
+        # все товары + владелец + user_rate
+        items = await self.items.list_with_owner_by_cargo(cargo_id=cargo_id)
+
+        # общий вес по посылке (берём из legs, где он уже пересчитан)
+        total_weight_all = Decimal(str(legs.get("total_weight_kg") or 0))
+        if total_weight_all <= 0:
+            # запасной вариант: считаем из товаров
+            total_weight_all = Decimal("0")
+            for it in items:
+                qty = Decimal(str(it.get("quantity") or 1))
+                w_single = Decimal(str(it.get("weight_kg") or 0))
+                total_weight_all += (w_single * qty)
+            if total_weight_all <= 0:
+                total_weight_all = Decimal("1")
+
+        cn_msk_total_usd = Decimal(str(legs["cn_to_msk"]["delivery_cost_usd"]))
+        msk_by_total_usd = Decimal(str(legs["msk_to_by"]["delivery_cost_usd"]))
+        delivery_total_all = cn_msk_total_usd + msk_by_total_usd
+
+        enriched: list[dict] = []
+
+        for it in items:
+            it = dict(it)  # на всякий случай делаем копию
+
+            price_cny = Decimal(str(it.get("price") or 0))
+            qty       = Decimal(str(it.get("quantity") or 1))
+            w_single  = Decimal(str(it.get("weight_kg") or 0))
+            w_total   = (w_single * qty).quantize(Decimal("0.001"))
+
+            rate = Decimal(str(it.get("user_rate") or DEFAULT_RATE))
+
+            # цена товара в USD
+            goods_usd_per_unit = (price_cny * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            goods_usd_total    = (goods_usd_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+            # доля доставки по весу
+            share = (w_total / total_weight_all) if total_weight_all > 0 else Decimal("0")
+
+            delivery_total_item = (delivery_total_all * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            if qty > 0:
+                delivery_per_unit = (delivery_total_item / qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            else:
+                delivery_per_unit = delivery_total_item
+
+            # итог
+            final_per_unit = (goods_usd_per_unit + delivery_per_unit).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            final_total    = (final_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+            it["goods_usd_per_unit"]    = goods_usd_per_unit
+            it["goods_usd_total"]       = goods_usd_total
+            it["delivery_per_unit_usd"] = delivery_per_unit
+            it["delivery_total_usd"]    = delivery_total_item
+            it["final_per_unit_usd"]    = final_per_unit
+            it["final_total_usd"]       = final_total
+
+            enriched.append(it)
+
+        cargo_out = dict(cargo)
+        cargo_out["items_count"] = len(enriched)
+
+        return {
+            "cargo": cargo_out,
+            "items": enriched,
+        }
 
     
 # ---------------------------------------------------------

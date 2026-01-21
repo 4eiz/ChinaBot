@@ -54,6 +54,8 @@ __exports__/
 *.ini
 *.local
 *.cfg
+*.zip
+*.rar
 
 # --- Coverage / tests ---
 .coverage

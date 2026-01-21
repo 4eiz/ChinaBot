@@ -1,9 +1,9 @@
-import os
-import tempfile
 from io import BytesIO
 
 from aiogram import types, F, Router
 from typing import Dict
+from decimal import Decimal
+from config import CLEAR_RATE
 
 from keyboards import AdminFlowCallback, AdminKB
 from app.handlers.services.pdf_export import PDFExportService
@@ -52,17 +52,43 @@ class AdminShipments:
         await call.message.answer(text=text, reply_markup=kb)
 
 
-    async def shipments(self, call: types.CallbackQuery):
+
+    async def shipments(self, call: types.CallbackQuery, callback_data: AdminFlowCallback | None = None):
         await call.message.delete()
 
         is_admin = await self.users.is_admin(user_id=call.from_user.id)
         if not is_admin:
-            text = "⛔️ Нет прав"
-            return await call.answer(text=text, show_alert=True)
-        cargos = await self.cargo.cargos.list_all()
+            return await call.answer(text="⛔️ Нет прав", show_alert=True)
 
-        text = "📦 <b>Посылки</b> (админ)"
-        kb = AdminKB.shipments_list(cargos=cargos)
+        tab = (callback_data.status if callback_data else None) or "shared"
+        page = (callback_data.id if callback_data else None) or 1
+        page = max(1, int(page))
+        limit = 5
+        offset = (page - 1) * limit
+
+        if tab == "archived":
+            scope = None
+            archived = True
+            title = "🗄 Архив"
+        elif tab == "personal":
+            scope = "personal"
+            archived = False
+            title = "👤 Личные"
+        else:
+            tab = "shared"
+            scope = "shared"
+            archived = False
+            title = "👥 Общие"
+
+        total = await self.cargo.cargos.count_admin_filtered(scope=scope, archived=archived)
+        total_pages = max(1, (total + limit - 1) // limit)
+        page = min(page, total_pages)
+        offset = (page - 1) * limit
+
+        cargos = await self.cargo.cargos.list_admin_filtered(scope=scope, archived=archived, limit=limit, offset=offset)
+
+        text = f"📦 <b>Посылки</b> (админ) — {title} <code>[{page}/{total_pages}]</code>"
+        kb = AdminKB.shipments_list(cargos=cargos, tab=tab, page=page, total_pages=total_pages, has_prev=page>1, has_next=page<total_pages)
         await call.message.answer(text=text, reply_markup=kb)
 
 
@@ -70,24 +96,62 @@ class AdminShipments:
         await call.message.delete()
 
         cargo_id = callback_data.id
-        cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
 
-        if not cargo:
+        info = await self.cargo.get_cargo_info(cargo_id=cargo_id)
+        if not info:
             text = "❌ Посылка не найдена"
             return await call.answer(text=text, show_alert=True)
 
-        legs = await self.cargo.compute_pricing_two_legs(cargo_id=cargo_id)
+        cargo = info["cargo"]
+        cargo_type_name = info.get("cargo_type_name") or "—"
+        legs = info["pricing"]
+        item_count = info["items_count"]
+        user_count = info["users_count"]
+        sum_cny = info["sum_cny"]
+        sum_usd_by_user = info["sum_usd_by_user"]
+        sum_usd_clear = info["sum_usd_clear"]
+        profit = info["profit"]
 
+        sum_cny_str = f"{sum_cny.quantize(Decimal('0.01'))} ¥"
+        sum_usd_user_str = f"{sum_usd_by_user:.2f}$"
+        sum_usd_clear_str = f"{sum_usd_clear:.2f}$"
+        profit_str = f"{profit:.2f}$"
+
+        
+        # --- owner/scope info ---
+        scope_label = "👥 Общая" if cargo.get("scope") == "shared" else "👤 Личная"
+        owner_line = ""
+        if cargo.get("scope") != "shared":
+            owner_id = cargo.get("owner_user_id")
+            if owner_id:
+                u = await self.users.get_user(user_id=int(owner_id)) or {}
+                fio = " ".join(filter(None, [
+                    u.get("name") or u.get("first_name"),
+                    u.get("surname") or u.get("last_name"),
+                ])).strip() or "—"
+                phone = (u.get("phone_number") or u.get("phone")) or "—"
+                owner_line = f"👤 Владелец: <code>{owner_id}</code> — {fio} (📱 <code>{phone}</code>)\n"
+            else:
+                owner_line = "👤 Владелец: —\n"
         text = (
-            f"📦 <b>Посылка #{cargo_id}</b>\n"
+            f"📦 <b>Посылка <code>#{cargo_id}</code></b>\n"
+            f"{scope_label}\n"
+            f"{owner_line}"
+            f"🏷 Тип: <code>{cargo_type_name}</code>\n"
             f"🔖 Редактирование: <code>{cargo['status']}</code>\n"
-            f"💵 Оплата: <code>{cargo.get('payment_status') or '—'}</code>\n"
-            # f"🚚 Маршрут: <code>{cargo.get('route_status') or '—'}</code>\n"
+            f"💵 Стоимость: <code>{cargo.get('payment_status') or '—'}</code>\n"
             f"⚖️ Вес: <code>{legs['total_weight_kg']} кг</code>\n"
             f"💰 CN→MSK: <code>{legs['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 MSK→BY: <code>{legs['msk_to_by']['delivery_cost_usd']}$</code>\n"
+            f"\n"
+            f"🧩 Товаров: <code>{item_count}</code>\n"
+            f"👥 Юзеров: <code>{user_count}</code>\n"
+            f"💴 Сумма (<b>CNY</b>): <code>{sum_cny_str}</code>\n"
+            f"💵 Сумма (<b>USD</b>): <code>{sum_usd_user_str}</code>\n"
+            f"💵 Сумма (<b>USD</b>, честный <code>{CLEAR_RATE}</code>): <code>{sum_usd_clear_str}</code>\n"
+            f"📈 Прибыль: <b><code>{profit_str}</code></b>\n"
         )
-        kb = AdminKB.shipment_view(cargo_id=cargo_id)
+        kb = AdminKB.shipment_view(cargo=cargo)
         await call.message.answer(text=text, reply_markup=kb)
 
 

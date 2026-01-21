@@ -1,7 +1,7 @@
 # keyboards/admin_kb.py  (или где у тебя лежит AdminKB)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
-from .callback_data import AdminFlowCallback, PaymentFlowCallback
+from .callback_data import AdminFlowCallback, PaymentFlowCallback, ProfileFlowCallback, ShipmentFlowCallback
 
 class AdminKB:
     @staticmethod
@@ -9,31 +9,96 @@ class AdminKB:
         b = InlineKeyboardBuilder()
         b.button(text="📦 Посылки", callback_data=AdminFlowCallback(action="shipments").pack())
         b.button(text="👥 Пользователи (скоро)", callback_data=AdminFlowCallback(action="users_stub").pack())
+        b.button(text="⬅ Назад", callback_data=ProfileFlowCallback(action="back_to_profile").pack())
+
         b.adjust(1, 1)
         return b.as_markup()
 
     @staticmethod
-    def shipments_list(cargos: list[dict]) -> InlineKeyboardMarkup:
+    def shipments_list(
+        cargos: list[dict],
+        *,
+        tab: str = "shared",  # shared|personal|archived
+        page: int = 1,
+        total_pages: int = 1,
+        has_prev: bool = False,
+        has_next: bool = False,
+    ) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
+
+        # табы
+        b.button(
+            text=("👥 Общие ✅" if tab=="shared" else "👥 Общие"),
+            callback_data=AdminFlowCallback(action="shipments", status="shared", id=1).pack()
+        )
+        b.button(
+            text=("👤 Личные ✅" if tab=="personal" else "👤 Личные"),
+            callback_data=AdminFlowCallback(action="shipments", status="personal", id=1).pack()
+        )
+        b.button(
+            text=("🗄 Архив ✅" if tab=="archived" else "🗄 Архив"),
+            callback_data=AdminFlowCallback(action="shipments", status="archived", id=1).pack()
+        )
+
+        # список
         for c in cargos or []:
             title = c.get("title") or f"#{c['id']}"
             b.button(
-                text=f"📦 #{c['id']} | {title}",
+                # ВАЖНО: текст кнопок не меняем (тип выводим в информации о посылке)
+                text=title,
                 callback_data=AdminFlowCallback(action="open", id=c["id"]).pack()
             )
+
+        # пагинация
+        if total_pages > 1:
+            if has_prev:
+                b.button(
+                    text="◀️",
+                    callback_data=AdminFlowCallback(action="shipments", status=tab, id=page-1).pack()
+                )
+            b.button(
+                text=f"{page}/{total_pages}",
+                callback_data=AdminFlowCallback(action="shipments", status=tab, id=page).pack()
+            )
+            if has_next:
+                b.button(
+                    text="▶️",
+                    callback_data=AdminFlowCallback(action="shipments", status=tab, id=page+1).pack()
+                )
+
         b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="menu").pack())
-        b.adjust(1)
+
+        sizes: list[int] = [3]
+        if cargos:
+            sizes += [1] * len(cargos)
+        if total_pages > 1:
+            sizes.append(3 if (has_prev and has_next) else 2 if (has_prev or has_next) else 1)
+        sizes.append(1)
+        b.adjust(*sizes)
         return b.as_markup()
 
+
     @staticmethod
-    def shipment_view(cargo_id: int) -> InlineKeyboardMarkup:
+    def shipment_view(cargo: int) -> InlineKeyboardMarkup:
+
+        cargo_id = cargo.get('id')
+
         b = InlineKeyboardBuilder()
         b.button(text="🔖 Статусы", callback_data=AdminFlowCallback(action="status", id=cargo_id).pack())
         b.button(text="👥 Сводка по людям", callback_data=AdminFlowCallback(action="summary", id=cargo_id).pack())
-        b.button(text="📄 Экспорт PDF (админ)", callback_data=AdminFlowCallback(action="export_admin_pdf", id=cargo_id).pack())
+        b.button(text="📊 Excel 352", callback_data=AdminFlowCallback(action="export_excel_352", id=cargo_id).pack())
+        b.button(text="📊 Excel Садовод", callback_data=AdminFlowCallback(action="export_excel_sadovod", id=cargo_id).pack())
         b.button(text="🧾 Экспорт товаров (PDF)", callback_data=AdminFlowCallback(action="export_items_pdf", id=cargo_id).pack())
+        
+        if cargo.get("status") == "open":
+            b.button(
+                text="📨 Отправить посылку",
+                callback_data=ShipmentFlowCallback(action="send_request", id=cargo_id).pack()
+            )
+        
         b.button(text="⬅ Назад", callback_data=AdminFlowCallback(action="shipments").pack())
-        b.adjust(1)
+        
+        b.adjust(1, 1, 2, 1, 1, 1)
         return b.as_markup()
 
     @staticmethod
@@ -70,7 +135,7 @@ class AdminKB:
         b = InlineKeyboardBuilder()
         for amount in ("5","10","20","50","100","200"):
             b.button(text=f"{amount} $", callback_data=PaymentFlowCallback(action="pay_amount", amount=amount).pack())
-        b.button(text="🔢 Другая сумма", callback_data=AdminFlowCallback(action="pay_amount_custom").pack())
+        # b.button(text="🔢 Другая сумма", callback_data=AdminFlowCallback(action="pay_amount_custom").pack())
         # Назад к типам (ВАЖНО для твоего первого бага)
         b.button(text="⬅ Назад к типам", callback_data=AdminFlowCallback(action="back").pack())
         b.adjust(3, 3, 1)

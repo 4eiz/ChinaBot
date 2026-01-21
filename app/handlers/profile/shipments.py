@@ -1,6 +1,7 @@
 from io import BytesIO
 import os, tempfile
 from typing import Dict
+from decimal import Decimal
 
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
@@ -12,7 +13,8 @@ from database import CargoService, UsersDB
 from app.handlers.services.pdf_export import PDFExportService
 from app.handlers.services.admin_notifier import AdminNotifier
 
-from config import bot, ADMIN_CHAT_ID
+from config import bot, ADMIN_CHAT_ID, DEFAULT_RATE
+from media.photos import PhotoBank
 
 
 
@@ -28,6 +30,8 @@ class ShipmentsHandler:
         # регистрируем хендлеры
         self.router.callback_query.register(self.list_shipments, ProfileFlowCallback.filter(F.action == "shipments"))
         self.router.callback_query.register(self.list_shared_shipments, ProfileFlowCallback.filter(F.action == "shipments_shared"))
+        self.router.callback_query.register(self.list_archived_shipments, ProfileFlowCallback.filter(F.action == "shipments_archived"))
+        self.router.callback_query.register(self.list_shipments_paged, ShipmentFlowCallback.filter(F.action.in_(["list_personal", "list_shared", "list_archived"])))
         self.router.callback_query.register(self.create_shipment, ShipmentFlowCallback.filter(F.action == "create"))
         self.router.callback_query.register(self.choose_type, ShipmentFlowCallback.filter(F.action == "type"), ShipmentFSM.type)
         self.router.message.register(self.msg_input_name, ShipmentFSM.name)
@@ -48,36 +52,80 @@ class ShipmentsHandler:
     async def list_shipments(self, call: types.CallbackQuery):
         # ЛИЧНЫЕ
         await call.message.delete()
-        user_id = call.from_user.id
-        cargos = await self.cargo_service.cargos.list_by_user(user_id=user_id)  # личные
-        text = "📦 Ваши ЛИЧНЫЕ посылки:" if cargos else "У вас пока нет личных посылок."
-        data = [dict(c) for c in cargos]
-        kb = ShipmentsKB.list_shipments(cargos=data, mode="personal")
-        await call.message.answer(text=text, reply_markup=kb)
+        await self._render_shipments_list(call=call, mode="personal", page=1)
 
 
     async def list_shared_shipments(self, call: types.CallbackQuery):
-        # ОБЩИЕ, где у юзера есть товары
+        # ОБЩИЕ (активные), где у юзера есть товары
         await call.message.delete()
+        await self._render_shipments_list(call=call, mode="shared", page=1)
 
+
+    
+
+    async def list_archived_shipments(self, call: types.CallbackQuery):
+        # АРХИВ: все посылки пользователя со статусом archived
+        await call.message.delete()
+        await self._render_shipments_list(call=call, mode="archived", page=1)
+
+
+    async def list_shipments_paged(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
+        await call.message.delete()
+        action = callback_data.action
+        page = callback_data.page or 1
+        if action == "list_personal":
+            mode = "personal"
+        elif action == "list_shared":
+            mode = "shared"
+        else:
+            mode = "archived"
+        await self._render_shipments_list(call=call, mode=mode, page=page)
+
+
+    async def _render_shipments_list(self, *, call: types.CallbackQuery, mode: str, page: int):
         user_id = call.from_user.id
-        cargos = await self.cargo_service.cargos.list_shared_by_user_participation(user_id=user_id)
-        
-        text = "👥 Общие посылки, где есть ваши товары:" if cargos else "В общих посылках ваших товаров пока нет."
-        data = [dict(c) for c in cargos]
-        kb = ShipmentsKB.list_shipments(cargos=data, mode="shared")
-        await call.message.answer(text=text, reply_markup=kb)
+        limit = 5
+        page = max(1, page)
+        offset = (page - 1) * limit
 
+        if mode == "personal":
+            total = await self.cargo_service.cargos.count_personal_active_by_user(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_personal_active_by_user(user_id=user_id, limit=limit, offset=offset)
+            text = "📦 Ваши ЛИЧНЫЕ посылки:" if total else "У вас пока нет личных посылок."
+        elif mode == "shared":
+            total = await self.cargo_service.cargos.count_shared_active_by_user_participation(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_shared_active_by_user_participation(user_id=user_id, limit=limit, offset=offset)
+            text = "👥 Общие посылки, где есть ваши товары:" if total else "В общих посылках ваших товаров пока нет."
+        else:
+            total = await self.cargo_service.cargos.count_archived_by_user(user_id=user_id)
+            cargos = await self.cargo_service.cargos.list_archived_by_user(user_id=user_id, limit=limit, offset=offset)
+            text = "🗄 Ваш архив посылок:" if total else "В архиве пока пусто."
+
+        total_pages = max(1, (total + limit - 1) // limit)
+        page = min(page, total_pages)
+        has_prev = page > 1
+        has_next = page < total_pages
+
+        data = [dict(c) for c in cargos]
+        kb = ShipmentsKB.list_shipments(
+            cargos=data,
+            mode=mode,
+            page=page,
+            total_pages=total_pages,
+            has_prev=has_prev,
+            has_next=has_next,
+        )
+        photo = PhotoBank.get_file('CARGOS_IMAGE')
+        await call.message.answer_photo(photo=photo, caption=f"{text} <code>[{page}/{total_pages}]</code>", reply_markup=kb)
 
     async def create_shipment(self, call: types.CallbackQuery, state: FSMContext):
         await call.message.delete()
-        
+
         kb = ShipmentsKB.choose_type()
         text = "Выберите тип посылки:"
 
         await call.message.answer(text=text, reply_markup=kb)
         await state.set_state(ShipmentFSM.type)
-
 
     async def choose_type(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         await call.message.delete()
@@ -119,15 +167,18 @@ class ShipmentsHandler:
         cargo_type_id = await self.cargo_service.cargo_types.get_id_by_code(code=data["type"])
         # print(f'ID: {cargo_type_id}')
 
-        await self.cargo_service.cargos.create(
+        data_ship = await self.cargo_service.cargos.create(
             scope="personal",
             cargo_type_id=cargo_type_id,
             owner_user_id=call.from_user.id,
             title=data["name"]
         )
         await state.clear()
+
         text = "✅ Посылка создана!"
-        await call.message.answer(text=text)
+        cargo_id = data_ship.get('id')
+        kb = ShipmentsKB.open_shipment(cargo_id=cargo_id)
+        await call.message.answer(text=text, reply_markup=kb)
 
 
     async def back_to_name(self, call: types.CallbackQuery, state: FSMContext):
@@ -137,19 +188,33 @@ class ShipmentsHandler:
         text = "<b>✏️ Введите название посылки (до 20 символов):</b>"
         await call.message.answer(text=text)
 
+
     async def view_shipment(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
         await call.message.delete()
 
         cargo_id = callback_data.id
-        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
-        if not cargo:
+
+        info = await self.cargo_service.get_cargo_info(
+            cargo_id=cargo_id,
+            for_user_id=call.from_user.id,
+        )
+        if not info:
             await call.answer("❌ Посылка не найдена", show_alert=True)
             return
 
-        type_row = await self.cargo_service.cargo_types.get(cargo_type_id=cargo["cargo_type_id"])
-        type_name = type_row["name"] if type_row else "—"
+        cargo = info["cargo"]
+        type_name = info["cargo_type_name"] or "—"
+        pricing2 = info["pricing"]
 
-        pricing2 = await self.cargo_service.compute_pricing_two_legs(cargo_id=cargo_id)
+        user_block = info.get("current_user") or {}
+        rate = user_block.get("rate", Decimal(str(DEFAULT_RATE)))
+        sum_cny_user = user_block.get("sum_cny", Decimal("0"))
+        sum_usd_user = user_block.get("sum_usd", Decimal("0"))
+        user_items_count = user_block.get("items_count", 0)
+
+        sum_cny_str = f"{sum_cny_user.quantize(Decimal('0.01'))}¥"
+        sum_usd_str = f"{sum_usd_user:.2f}$"
+        rate_str = f"{rate.normalize()}"
 
         text = (
             f"📦 <b>Посылка</b>\n\n"
@@ -157,15 +222,22 @@ class ShipmentsHandler:
             f"📂 <b>Тип:</b> <code>{type_name}</code>\n"
             f"🔖 <b>Редактирование:</b> <code>{cargo['status']}</code>\n"
             f"💵 <b>Оплата:</b> <code>{cargo.get('payment_status')}</code>\n"
-            f"🚚 <b>Маршрут:</b> <code>{cargo.get('route_status')}</code>\n"
             f"⚖️ <b>Вес:</b> <code>{pricing2['total_weight_kg']} кг</code>\n"
             f"💰 <b>Доставка CN→MSK:</b> <code>{pricing2['cn_to_msk']['delivery_cost_usd']}$</code>\n"
             f"💰 <b>Доставка MSK→BY:</b> <code>{pricing2['msk_to_by']['delivery_cost_usd']}$</code>\n"
+            f"\n"
+            f"🧾 <b>Ваши товары:</b>\n"
+            f"   • <b>Позиции:</b> <code>{user_items_count}</code>\n"
+            f"   • <b>Сумма в ¥:</b> <code>{sum_cny_str}</code>\n"
+            f"   • <b>Сумма в $:</b> <code>{sum_usd_str}</code> <i>курс <code>{rate_str}</code></i>\n"
         )
 
-        kb = ShipmentViewKB.main(cargo=cargo)
-        await call.message.answer(text=text, reply_markup=kb)
+        # ВАЖНО: обычные пользователи не могут отправлять ОБЩИЕ посылки
+        is_admin = bool(await self.users.is_admin(call.from_user.id))
+        can_send = not (cargo.get("scope") == "shared" and not is_admin)
 
+        kb = ShipmentViewKB.main(cargo=cargo, can_send=can_send)
+        await call.message.answer(text=text, reply_markup=kb)
 
 
     async def list_items(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
@@ -223,11 +295,11 @@ class ShipmentsHandler:
             return
 
         # берём только ТВОИ товары (в общей — это must; в личной — тоже корректно)
-        items = await self.cargo_service.items.list_by_cargo_for_user_paginated(
+        raw_items = await self.cargo_service.items.list_by_cargo_for_user_paginated(
             cargo_id=cargo_id, user_id=user_id, limit=10_000, offset=0
         )
 
-        if not items:
+        if not raw_items:
             text = "Похоже, у вас нет товаров в этой посылке."
             await call.message.answer(text=text)
             return
@@ -240,25 +312,48 @@ class ShipmentsHandler:
             await call.message.answer(text=text)
             return
 
-        # тянем миниатюры по file_id
-        photos = await self._collect_item_photos(bot=call.bot, items=items)
+        detailed_items: list[dict] = []
+        for it in raw_items:
+            info = await self.cargo_service.get_item_detailed_info(
+                cargo_id=cargo_id,
+                item_id=it["id"],
+            )
+            if not info:
+                continue
+
+            ext = dict(it)
+            ext["price_usd_per_unit"] = info["price_usd_per_unit"]
+            ext["delivery_per_unit_usd"] = info["delivery_per_unit_usd"]
+            ext["final_total_usd"] = info["final_total_usd"]
+            # если хочешь позже — можно ещё положить price_usd_total, delivery_total и т.п.
+            detailed_items.append(ext)
+
+        if not detailed_items:
+            await call.message.answer("Не удалось собрать детальную информацию по товарам.")
+            return
+
+        # тянем миниатюры по file_id (используем те же id)
+        photos = await self._collect_item_photos(bot=call.bot, items=detailed_items)
 
         # готовим PDF для юзера
-        tmpdir = tempfile.gettempdir()  # на Linux → /tmp, на Windows → C:\Users\...\AppData\Local\Temp
+        tmpdir = tempfile.gettempdir()
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_user_{user_id}.pdf")
+
+        user = await self.users.get_user(user_id=user_id)
 
         pdf = PDFExportService()
         path = pdf.generate_user_cart_pdf(
             file_path=file_path,
             cargo=cargo,
-            user={"first_name": call.from_user.first_name or ""},
-            items=items,
+            user=user,
+            items=detailed_items,
             settlement_row=row,
             photos=photos,  # {item_id: bytes}
         )
 
         text = "📄 Ваш отчёт по товарам в этой посылке"
         await call.message.answer_document(document=FSInputFile(file_path), caption=text)
+
 
     async def _collect_item_photos(self, *, bot, items: list[dict]) -> Dict[int, bytes]:
         """
@@ -284,18 +379,21 @@ class ShipmentsHandler:
         await call.message.delete()
 
         cargo_id = callback_data.id
-        item_id = callback_data.item_id
-        user_id = call.from_user.id
+        item_id  = callback_data.item_id
+        user_id  = call.from_user.id
 
-        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
-        item = await self.cargo_service.items.get(item_id=item_id)
-        user_data = await self.users.get_user(user_id=user_id)
-        rate = user_data.get('rate')
+        # получаем полную инфу по товару из сервиса
+        info = await self.cargo_service.get_item_detailed_info(
+            cargo_id=cargo_id,
+            item_id=item_id,
+        )
+        if not info:
+            return await call.answer("❌ Товар или посылка не найдены", show_alert=True)
 
-        if not cargo or not item:
-            await call.answer("❌ Товар или посылка не найдены", show_alert=True)
-            return
+        cargo = info["cargo"]
+        item  = info["item"]
 
+        # защита от просмотра чужих товаров в общей посылке
         if cargo["scope"] == "shared" and item["user_id"] != user_id:
             await call.answer("⛔️ Это не ваш товар.", show_alert=True)
             fake_cb = ShipmentFlowCallback(action="list_items", id=cargo_id, page=1)
@@ -304,18 +402,64 @@ class ShipmentsHandler:
 
         can_edit = (cargo.get("status") == "open") and (item["user_id"] == user_id)
 
+        # достаём уже посчитанные значения
+        qty  = info["quantity"]
+        rate = info["rate"]
+        price_usd = info["price_usd_per_unit"]
+        price_tot = info["price_usd_total"]
+
+        delivery_cn_msk = info["delivery_cn_msk_usd"]
+        delivery_msk_by = info["delivery_msk_by_usd"]
+        delivery_total = info["delivery_total_usd"]
+        delivery_per = info["delivery_per_unit_usd"]
+
+        final_per_unit = info["final_per_unit_usd"]
+        final_total = info["final_total_usd"]
+
+        weight_single = info["weight_kg_single"]
+        weight_total = info["weight_kg_total"]
+
+        item_id_str = item["id"]
+
+        total_block1 = ""
+        if qty > 1:
+            total_block1 = f"   • за {qty} шт: <code>{price_tot:.2f}$</code>\n"
+
+        total_block2 = ""
+        if qty > 1:
+            total_block2 = f"   • Всего доставки (за все шт): <code>{delivery_total:.2f}$</code>\n"
+
+        total_block3 = ""
+        if qty > 1:
+            total_block3 = f"   • за {qty} шт: <code>{final_total:.2f}$</code>\n"
+
         text = (
-            f"🛍 <b>{item['title']}</b>\n\n"
-            f"💰 Цена: <code>{item['price'] * rate}$</code>\n"
-            f"📦 Количество: <code>{item['quantity']}</code>\n"
-            f"⚖️ Вес: <code>{item['weight_kg']} кг</code>\n"
+            f"🛍 <b>{item['title']}</b> [ID: <code>{item_id_str}</code>]\n\n"
+            f"💱 <b>Курс:</b> <code>{rate.normalize()}</code>\n"
+            f"📦 Количество: <code>{qty}</code>\n"
+            f"⚖️ Вес за 1 шт: <code>{weight_single} кг</code>\n"
+            f"⚖️ Вес всего: <code>{weight_total} кг</code>\n"
+            f"\n"
+            f"💵 <b>Цена товара:</b>\n"
+            f"   • за 1 шт: <code>{price_usd:.2f}$</code>\n"
+            f"{total_block1}"
+            f"\n"
+            f"🚚 <b>Доставка:</b>\n"
+            f"   • CN→MSK: <code>{delivery_cn_msk:.2f}$</code>\n"
+            f"   • MSK→BY: <code>{delivery_msk_by:.2f}$</code>\n"
+            f"   • Доставка за 1 шт: <code>{delivery_per:.2f}$</code>\n"
+            f"{total_block2}"
+            f"\n"
+            f"🧮 <b>Итоговая цена:</b>\n"
+            f"   • за 1 шт: <code>{final_per_unit:.2f}$</code>\n"
+            f"{total_block3}"
+            f"\n"
         )
+
         if item.get("color"):
             text += f"🎨 Цвет: <code>{item['color']}</code>\n"
         if item.get("size"):
             text += f"📏 Размер: <code>{item['size']}</code>\n"
-        if item.get("options"):
-            text += f"⚙️ Опции: <code>{item['options']}</code>\n"
 
         kb = ShipmentsKB.item_view(cargo_id=cargo_id, item_id=item_id, can_edit=can_edit)
 
@@ -365,19 +509,33 @@ class ShipmentsHandler:
         await self.list_items(call, fake_cb)
 
 
+    # ── send_request: проверка на пустую посылку ───────────────────────────────────
     async def send_request(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """
         Шаг 1: показать подтверждение перед отправкой.
         """
-
-        await call.message.delete()
-
         cargo_id = int(callback_data.id)
+
+        # 1) валидируем статус
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo or cargo.get("status") != "open":
-            text = "Эта посылка не редактируется или уже отправлена."
-            return await call.answer(text=text, show_alert=True)
+            return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
 
+        # 1.1) запрет отправки общей посылки для не-админов
+        if cargo.get("scope") == "shared":
+            is_admin = bool(await self.users.is_admin(call.from_user.id))
+            if not is_admin:
+                return await call.answer("⛔️ Нельзя отправлять общую посылку. Отправку делает администратор.", show_alert=True)
+
+        # 2) валидируем наличие товаров (не удаляем сообщение до ответа!)
+        await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)
+        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
+        items_count = int(cargo.get("items_count") or 0)
+        if items_count == 0:
+            return await call.answer("❌ Нельзя отправить пустую посылку — добавьте хотя бы один товар.", show_alert=True)
+
+        # 3) дальше всё как было
+        await call.message.delete()
         text = (
             "❗ <b>Ты уверен, что посылка собрана полностью и лишнего нет?</b>\n\n"
             "После отправки изменить состав будет <u>невозможно</u> 🚫"
@@ -386,31 +544,49 @@ class ShipmentsHandler:
         await call.message.answer(text=text, reply_markup=kb)
         await call.answer()
 
+
+    # ── send_yes: повторная проверка перед сменой статуса ──────────────────────────
     async def send_yes(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """
         Шаг 2: юзер подтвердил — переводим в pending и шлём заявку админам.
         """
-
-        await call.message.delete()
         cargo_id = int(callback_data.id)
+
+        # 1) статус «open» обязателен
         cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         if not cargo or cargo.get("status") != "open":
-            text = "Эта посылка не редактируется или уже отправлена."
-            return await call.answer(text=text, show_alert=True)
+            return await call.answer("Эта посылка не редактируется или уже отправлена.", show_alert=True)
 
-        # актуализируем агрегаты и переводим статус
+        # 1.1) запрет отправки общей посылки для не-админов
+        if cargo.get("scope") == "shared":
+            is_admin = bool(await self.users.is_admin(call.from_user.id))
+            if not is_admin:
+                return await call.answer(
+                    "⛔️ Нельзя отправлять общую посылку. Отправку делает администратор.",
+                    show_alert=True,
+                )
+
+        # 2) гарантируем актуальные агрегаты и проверяем, что не пусто
         await self.cargo_service.cargos.recalc_weight_and_count(cargo_id=cargo_id)
+        cargo = await self.cargo_service.cargos.get(cargo_id=cargo_id)
+        items_count = int(cargo.get("items_count") or 0)
+        if items_count == 0:
+            return await call.answer("❌ Нельзя отправить пустую посылку — добавьте хотя бы один товар.", show_alert=True)
+
+        # 3) всё ок → переводим в pending
         await self.cargo_service.cargos.set_status(cargo_id=cargo_id, status="pending")
 
-        # уведомление админам
+        # 4) уведомление админам
         notifier = AdminNotifier(bot=bot, admin_chat_id=ADMIN_CHAT_ID)
         cargo_now = await self.cargo_service.cargos.get(cargo_id=cargo_id)
         username = call.from_user.username
         await notifier.notify_new_shipment_request(cargo_service=self.cargo_service, cargo=cargo_now, username=username)
 
-        text = "✅ <b>Заявка отправлена</b>. Администратор скоро проверит посылку."
-        await call.message.answer(text=text)
+        # 5) пользователю
+        await call.message.delete()
+        await call.message.answer("✅ <b>Заявка отправлена</b>. Администратор скоро проверит посылку.")
         await call.answer()
+
 
     async def send_no(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback, state: FSMContext):
         """
