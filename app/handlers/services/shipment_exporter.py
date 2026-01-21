@@ -29,23 +29,41 @@ class ExcelExportService:
     - Заполнение со 2-й строки.
     - Фото берём по Telegram file_id, вписываем в реальную ячейку E{row} БЕЗ изменения
       высоты строки/ширины колонки, с небольшим внутренним отступом.
-    - «цвет строго» (столбец 16) — всегда 'да'.
-    - «Цена доставки» (12) — не трогаем.
-    - «Цена (Юани)» (13) — формула шаблона остаётся.
+    - «цвет строго» (столбец 19 / S) — всегда 'да'.
+    - «Цена доставки» (15 / O) — не трогаем.
+    - «Цена (Юани)» (16 / P) — формула шаблона остаётся.
     - Возвращаем путь к временному xlsx: cargo_<ID>_<YYYYMMDD>.xlsx — отправляешь уже в своём месте.
     """
 
     PHOTO_COL_LETTER = "E"
+    # Индексы колонок соответствуют ТЕКУЩЕМУ шаблону cargo.xlsx (см. заголовки в файле).
+    #
+    # A  1  — №
+    # C  3  — Наименование
+    # D  4  — Ссылка
+    # E  5  — Фото
+    # F  6  — Цвет
+    # G  7  — Материал
+    # H  8  — "中文品名" / Китайское наименование
+    # I  9  — Бренд
+    # J 10  — Размер
+    # K 11  — Примечания
+    # M 13  — Кол-во
+    # N 14  — Цена за 1 ед. (¥)
+    # S 19  — цвет строго
     COL_INDEX = {
-        "num": 1,           # A — №
-        "title": 3,         # C — Наименование
-        "link": 4,          # D — Ссылка
-        "color": 6,         # F — Цвет
-        "size": 7,          # G — Размер
-        "notes": 8,         # H — Примечания
-        "qty": 10,          # J — Кол-во
-        "unit_price": 11,   # K — Цена/ед (¥)
-        "strict_color": 16  # P — «цвет строго»
+        "num": 1,              # A
+        "title": 3,            # C
+        "link": 4,             # D
+        "color": 6,            # F
+        "material": 7,         # G
+        "cn_title": 8,         # H
+        "brand": 9,            # I
+        "size": 10,            # J
+        "notes": 11,           # K
+        "qty": 13,             # M
+        "unit_price": 14,      # N
+        "strict_color": 19,    # S
     }
 
     def __init__(
@@ -92,6 +110,29 @@ class ExcelExportService:
                     for k in KEYS:
                         v = data.get(k)
                         if v:
+                            return str(v)
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
+    async def _extra_field(extra: object, keys: Tuple[str, ...]) -> str:
+        """Достаём значение из extra (dict или JSON-строка) по списку ключей."""
+        if extra is None:
+            return ""
+        if isinstance(extra, dict):
+            for k in keys:
+                v = extra.get(k)
+                if v not in (None, ""):
+                    return str(v)
+            return ""
+        if isinstance(extra, str):
+            try:
+                data = json.loads(extra)
+                if isinstance(data, dict):
+                    for k in keys:
+                        v = data.get(k)
+                        if v not in (None, ""):
                             return str(v)
             except Exception:
                 pass
@@ -208,10 +249,21 @@ class ExcelExportService:
             price = it.get("price") or 0
             notes = await self._notes_from_extra(it.get("extra"))
 
+            # Доп. поля под новый шаблон — берём из extra (если есть)
+            extra = it.get("extra")
+            material = await self._extra_field(extra, ("material", "материал", "Материал", "材质"))
+            cn_title = await self._extra_field(extra, (
+                "cn_title", "chinese_name", "chinese_title", "中文品名", "中文名称", "名称"
+            ))
+            brand = await self._extra_field(extra, ("brand", "бренд", "Бренд", "品牌"))
+
             cell(row=row, column=self.COL_INDEX["num"],        value=i)
             cell(row=row, column=self.COL_INDEX["title"],      value=str(title))
             cell(row=row, column=self.COL_INDEX["link"],       value=str(link))
             cell(row=row, column=self.COL_INDEX["color"],      value=str(color))
+            cell(row=row, column=self.COL_INDEX["material"],   value=str(material))
+            cell(row=row, column=self.COL_INDEX["cn_title"],   value=str(cn_title))
+            cell(row=row, column=self.COL_INDEX["brand"],      value=str(brand))
             cell(row=row, column=self.COL_INDEX["size"],       value=str(size))
             cell(row=row, column=self.COL_INDEX["notes"],      value=str(notes))
             cell(row=row, column=self.COL_INDEX["qty"],        value=qty)
