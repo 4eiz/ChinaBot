@@ -205,13 +205,31 @@ class PDFExportService:
             g = Decimal(str(g_val))
             d = Decimal(str(d_val))
             total = Decimal(str(total_val))
+
+
+            # оригинальная цена в юанях за 1 шт (если есть в payload)
+            # поддерживаем разные ключи из БД/экспорта
+            cny_raw = (
+                item.get("unit_price_cny")
+                or item.get("price_cny_per_unit")
+                or item.get("price_cny")
+                or item.get("price_cny_unit")
+                or item.get("price")  # часто цена в БД хранится в юанях
+            )
+            cny_unit = None
+            try:
+                if cny_raw not in (None, "", "-"):
+                    cny_unit = Decimal(str(cny_raw))
+            except Exception:
+                cny_unit = None
         except Exception:
             return Paragraph("-", self.styles["iOS"])
 
         html_price = (
-            f"товар/шт: {g:.2f}$<br/>"
-            f"дост./шт: {d:.2f}$<br/>"
-            f"<b>итого за {qty} шт: {total:.2f}$</b>"
+            (f"цена(¥)/шт: {cny_unit:.2f}¥<br/>" if cny_unit is not None else "")
+            + f"товар/шт: {g:.2f}$<br/>"
+            + f"дост./шт: {d:.2f}$<br/>"
+            + f"<b>итого за {qty} шт: {total:.2f}$</b>"
         )
         # ТУТ специально используем iOS, чтобы текст был «красивый» и не расползался
         return Paragraph(html_price, self.styles["iOS"])
