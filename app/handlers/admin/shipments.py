@@ -7,6 +7,7 @@ from config import CLEAR_RATE
 
 from keyboards import AdminFlowCallback, AdminKB
 from app.handlers.services.pdf_export import PDFExportService
+from media import PhotoBank
 
 
 class AdminShipments:
@@ -48,8 +49,10 @@ class AdminShipments:
             return await call.answer(text=text, show_alert=True)
         
         text = "🛠 <b>Админ-панель</b>\nВыберите раздел:"
+        photo = PhotoBank.get_file('ADMIN_PANEL_IMAGE')
+
         kb = AdminKB.menu()
-        await call.message.answer(text=text, reply_markup=kb)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
 
@@ -89,7 +92,8 @@ class AdminShipments:
 
         text = f"📦 <b>Посылки</b> (админ) — {title} <code>[{page}/{total_pages}]</code>"
         kb = AdminKB.shipments_list(cargos=cargos, tab=tab, page=page, total_pages=total_pages, has_prev=page>1, has_next=page<total_pages)
-        await call.message.answer(text=text, reply_markup=kb)
+        photo = PhotoBank.get_file('CARGOS_IMAGE')
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
     async def open_shipment(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):

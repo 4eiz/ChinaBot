@@ -18,9 +18,11 @@ class PhotoBank:
     MENU_IMAGE = BASE / "media/images/menu.jpg"
     PROFILE_IMAGE = BASE / "media/images/profile.jpg"
     CARGOS_IMAGE = BASE / "media/images/cargos.jpg"
+    INFO_IMAGE = BASE / "media/images/info.jpg"
+    SUPPORT_IMAGE = BASE / "media/images/support.jpg"
 
     # 🔐 Админка
-    ADMIN_PANEL_IMAGE = BASE / "media/images/admin_panel.png"
+    ADMIN_PANEL_IMAGE = BASE / "media/images/admin.jpg"
 
     # 📦 Категории
     CATEGORY_HOUSEHOLD = BASE / "media/images/categories/household.jpg"

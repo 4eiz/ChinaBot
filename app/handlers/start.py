@@ -6,7 +6,6 @@ from aiogram.filters import CommandStart
 from database import UsersDB, RequestsDB
 from app.handlers.form.fsm import FormState
 from app.handlers import FormClientHandler
-from media import PhotoBank
 import config
 
 from keyboards import StartKB, MenuCallback
@@ -82,8 +81,9 @@ class StartHandler:
             "Подсказка: в профиле доступны ваши посылки и настройки."
         )
         kb = StartKB.back_home()
+        photo = PhotoBank.get_file('INFO_IMAGE')
 
-        await call.message.answer(text=text, reply_markup=kb, disable_web_page_preview=True)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb, disable_web_page_preview=True)
 
 
     async def start_support(self, call: CallbackQuery, callback_data: MenuCallback):
@@ -102,8 +102,10 @@ class StartHandler:
             "Мы обязательно поможем!"
         )
         kb = StartKB.back_home()
+        photo = PhotoBank.get_file('SUPPORT_IMAGE')
 
-        await call.message.answer(text=text, reply_markup=kb)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+
 
     async def start_home(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()
