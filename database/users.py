@@ -23,9 +23,16 @@ class UsersDB:
         'phone_number': 'TEXT',
         'source': 'TEXT',
         'balance': 'NUMERIC DEFAULT 0',
-        'rate': f'NUMERIC DEFAULT {default_rate}',  # ← добавили колонку курса
+        'rate': f'NUMERIC DEFAULT {default_rate}',
         'is_admin': 'BOOLEAN DEFAULT FALSE',
-        'created_at': 'TIMESTAMP DEFAULT NOW()'
+        'created_at': 'TIMESTAMP DEFAULT NOW()',
+        
+        # --- ДОБАВЛЕННЫЕ КОЛОНКИ ДЛЯ DJANGO ---
+        'password': "TEXT DEFAULT ''",               # Автоматически пустой пароль
+        'last_login': 'TIMESTAMP DEFAULT NULL',      # Автоматически NULL
+        'is_active': 'BOOLEAN DEFAULT TRUE',      # Автоматически NULL
+        'is_staff': 'BOOLEAN DEFAULT FALSE',         # Доступ в админку (нет по умолчанию)
+        'is_superuser': 'BOOLEAN DEFAULT FALSE'      # Супер-права (нет по умолчанию)
     }
 
     EDITABLE_FIELDS = ['name', 'surname', 'phone_number', 'source', 'balance', 'rate', 'is_admin']
