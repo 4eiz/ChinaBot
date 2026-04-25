@@ -478,14 +478,27 @@ class ExcelTextFormExportService:
 
 
 # ============================================================
-# 3) ТК Экспедиция (авто-выбор листа по кол-ву товаров)
+# 3) ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву)
 # ============================================================
+#
+# Структура шаблона (файл ТК_Экспедиция_Южные ворота.xlsx):
+#   Лист «Образец»  — пример заполнения (не трогаем)
+#   Лист «1-31»     — 1-31  товаров
+#   Лист «32-83»    — 32-83 товара
+#   Лист «84-134»   — 84-134 товара
+#   Лист «135-185»  — 135-185 товаров
+#
+# Колонки в каждом рабочем листе (по образцу):
+#   A(1) — пустая / структурная
+#   B(2) — №  (порядковый номер)
+#   C(3) — Наименование товара (точное название)
+#   D(4) — Кол-во единиц
+#   E(5) — Единица измерения  → ВСЕГДА «шт.»
+#   F(6) — Общая стоимость в бел. рублях
+#
+# Строка «Итоговая стоимость» определяется автоматически по
+# наличию этой строки в колонке B или C.
 
-# Правила выбора листа из шаблона (по документу Образец):
-# Лист 2 → товаров 1-31
-# Лист 3 → товаров 32-83
-# Лист 4 → товаров 84-134
-# Лист 5 → товаров 135-185
 _EXPEDITION_SHEET_RANGES: List[Tuple[int, int, str]] = [
     (1,   31,  "1-31"),
     (32,  83,  "32-83"),
@@ -496,36 +509,29 @@ _EXPEDITION_SHEET_RANGES: List[Tuple[int, int, str]] = [
 
 class ExcelExpeditionExportService:
     """
-    Экспорт ТК «Экспедиция» (сопроводительное письмо).
+    Экспорт ТК «Экспедиция — Южные ворота» (сопроводительное письмо).
 
-    Бот автоматически выбирает нужный лист шаблона по количеству товаров:
-      1–31   → лист «1-31»
-      32–83  → лист «32-83»
-      84–134 → лист «84-134»
-      135–185 → лист «135-185»
-
-    Все единицы измерения — «шт.».
-    Столбцы (C=Наименование, D=Кол-во, E=Ед. изм., F=Стоимость):
-      «Наименование товара» — название из БД
-      «Кол-во единиц»       — quantity из БД
-      «Единица измерения»   — всегда «шт.»
-      «Общая стоимость»     — price * quantity * yuan_to_rub (бел. рубли)
-
-    Первая строка данных определяется по первой пустой ячейке в колонке
-    номера (#), начиная с HEADER_ROW_OFFSET.
+    Алгоритм:
+      1. Считаем кол-во товаров в посылке.
+      2. Автоматически выбираем нужный лист шаблона:
+           1–31   → «1-31»
+           32–83  → «32-83»
+           84–134 → «84-134»
+           135–185 → «135-185»
+      3. Находим первую строку данных (ищем «1» в колонке B).
+      4. Заполняем строки:
+           B = №, C = Наименование, D = Кол-во, E = «шт.», F = Стоимость (BYN)
+      5. Единица измерения — ВСЕГДА «шт.» (требование ТК).
     """
 
-    # Заголовок таблицы всегда занимает несколько строк.
-    # Ищем первую строку с числом «1» в первом столбце — это строка данных.
-    _DATA_SEARCH_MAX_ROW = 30  # не более 30 строк шапки
+    _DATA_SEARCH_MAX_ROW: int = 30
 
-    # Колонки данных (1-based). Берём из образца файла:
-    # B(2) = №, C(3) = Наименование, D(4) = Кол-во, E(5) = Ед.изм., F(6) = Стоимость
-    _COL_NUM   = 2
-    _COL_TITLE = 3
-    _COL_QTY   = 4
-    _COL_UNIT  = 5
-    _COL_PRICE = 6
+    # Колонки по структуре шаблона (1-based)
+    _COL_NUM   = 2   # B — №
+    _COL_TITLE = 3   # C — Наименование товара
+    _COL_QTY   = 4   # D — Кол-во единиц
+    _COL_UNIT  = 5   # E — Единица измерения (всегда «шт.»)
+    _COL_PRICE = 6   # F — Общая стоимость в бел. рублях
 
     def __init__(
         self,
@@ -534,10 +540,9 @@ class ExcelExpeditionExportService:
         yuan_to_rub: Optional[Decimal] = None,
     ) -> None:
         """
-        :param template_path: путь к Excel-шаблону ТК Экспедиция;
-                              по умолчанию: env EXPEDITION_XLSX_TEMPLATE
-                              или media/excel/expedition.xlsx
-        :param yuan_to_rub:   курс CNY→BYR; по умолчанию: env YUAN_TO_RUB или 15
+        :param template_path: путь к шаблону ТК Экспедиция;
+                              env EXPEDITION_XLSX_TEMPLATE или media/excel/expedition.xlsx
+        :param yuan_to_rub:   курс CNY→BYN; env YUAN_TO_RUB или 15
         """
         self.template_path = (
             template_path
@@ -559,24 +564,26 @@ class ExcelExpeditionExportService:
     def _select_sheet_name(items_count: int) -> str:
         """
         Возвращает имя листа по количеству товаров.
-        Если > 185 — возвращает последний лист (185 строк).
+        0 товаров → «1-31» (минимальный лист).
+        > 185 → «135-185» (максимальный лист).
         """
         for lo, hi, name in _EXPEDITION_SHEET_RANGES:
             if lo <= items_count <= hi:
                 return name
-        # items_count == 0 или > 185
         if items_count == 0:
-            return _EXPEDITION_SHEET_RANGES[0][2]  # «1-31»
-        return _EXPEDITION_SHEET_RANGES[-1][2]      # «135-185»
+            return _EXPEDITION_SHEET_RANGES[0][2]   # «1-31»
+        return _EXPEDITION_SHEET_RANGES[-1][2]       # «135-185»
 
     @staticmethod
     def _find_data_start_row(ws, max_search: int = 30) -> int:
         """
-        Ищет первую строку, где в колонке _COL_NUM (B) стоит число 1
-        (начало таблицы данных). Fallback — возвращает max_search + 1.
+        Ищет первую строку, где в колонке B(2) стоит число 1 —
+        это начало таблицы данных.
+        Если не найдено — возвращает max_search + 1 как fallback.
         """
+        col = ExcelExpeditionExportService._COL_NUM
         for r in range(1, max_search + 1):
-            val = ws.cell(row=r, column=ExcelExpeditionExportService._COL_NUM).value
+            val = ws.cell(row=r, column=col).value
             if val == 1 or val == "1":
                 return r
         return max_search + 1
@@ -594,19 +601,19 @@ class ExcelExpeditionExportService:
             cell.value = value
 
     async def _load_items(self, cargo_service, cargo_id: int) -> List[dict]:
-        """Загружает товары из БД."""
+        """Загружает товары из БД и формирует строки для Excel."""
         items = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
         result: List[dict] = []
         for it in items:
-            title = it.get("title") or "Без названия"
-            qty   = int(it.get("quantity") or 1)
-            cny   = Decimal(str(it.get("price") or 0))
-            total_rub = (cny * self.yuan_to_rub * qty).quantize(Decimal("0.01"))
+            title     = it.get("title") or "Без названия"
+            qty       = int(it.get("quantity") or 1)
+            cny       = Decimal(str(it.get("price") or 0))
+            total_byn = (cny * self.yuan_to_rub * qty).quantize(Decimal("0.01"))
             result.append({
                 "title":     title,
                 "qty":       qty,
-                "unit":      "шт.",
-                "total_rub": total_rub,
+                "unit":      "шт.",       # ВСЕГДА «шт.» — требование ТК Экспедиция
+                "total_byn": total_byn,
             })
         return result
 
@@ -629,7 +636,8 @@ class ExcelExpeditionExportService:
         """
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(
-                f"Excel-шаблон ТК Экспедиция не найден: {self.template_path}"
+                f"Excel-шаблон ТК Экспедиция не найден: {self.template_path}\n"
+                f"Положите файл по пути: {self.template_path}"
             )
 
         items = await self._load_items(cargo_service, cargo_id)
@@ -639,10 +647,11 @@ class ExcelExpeditionExportService:
         wb = load_workbook(self.template_path)
 
         if sheet_name not in wb.sheetnames:
+            available = ", ".join(f"'{s}'" for s in wb.sheetnames)
             wb.close()
             raise RuntimeError(
                 f"Лист '{sheet_name}' не найден в шаблоне. "
-                f"Доступные листы: {wb.sheetnames}"
+                f"Доступные листы: {available}"
             )
 
         ws = wb[sheet_name]
@@ -653,8 +662,8 @@ class ExcelExpeditionExportService:
             await self._safe_write(ws, row, self._COL_NUM,   idx + 1)
             await self._safe_write(ws, row, self._COL_TITLE, it["title"])
             await self._safe_write(ws, row, self._COL_QTY,   it["qty"])
-            await self._safe_write(ws, row, self._COL_UNIT,  it["unit"])
-            await self._safe_write(ws, row, self._COL_PRICE, float(it["total_rub"]))
+            await self._safe_write(ws, row, self._COL_UNIT,  it["unit"])   # «шт.»
+            await self._safe_write(ws, row, self._COL_PRICE, float(it["total_byn"]))
 
         today = datetime.now().strftime("%Y%m%d")
         tmpdir = tempfile.gettempdir()
@@ -723,7 +732,7 @@ async def export_expedition(
     template_path: Optional[str] = None,
     yuan_to_rub: Optional[Decimal] = None,
 ) -> str:
-    """Фасад для ТК Экспедиция (авто-выбор листа по кол-ву товаров)."""
+    """Фасад для ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву товаров)."""
     svc = ExcelExpeditionExportService(
         template_path=template_path,
         yuan_to_rub=yuan_to_rub,

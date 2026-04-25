@@ -1,44 +1,31 @@
-"""Утилиты для работы с сообщениями Telegram."""
+# app/utils/message_utils.py
+"""
+Утилиты для безопасной работы с сообщениями Telegram.
+"""
 from __future__ import annotations
 
 import logging
-from typing import Union
-
 from aiogram import types
-from aiogram.exceptions import TelegramBadRequest
 
 logger = logging.getLogger(__name__)
 
 
-async def safe_delete(
-    target: Union[types.Message, types.CallbackQuery],
-) -> bool:
+async def safe_delete(message: types.Message) -> None:
     """
-    Безопасно удаляет сообщение: если удалить нельзя (старое / уже удалено /
-    нет прав) — просто пропускает ошибку и возвращает False.
+    Пытается удалить сообщение.
 
-    Принимает Message или CallbackQuery (тогда удаляет call.message).
+    Если удаление невозможно (сообщение слишком старое, уже удалено,
+    нет прав и т.д.) — тихо пропускает ошибку и продолжает выполнение.
+    Это гарантирует, что бот ВСЕГДА отправит следующее сообщение,
+    даже если старое удалить не получилось.
 
-    Возвращает True при успешном удалении, False при пропуске.
+    Использование:
+        from app.utils import safe_delete
+
+        await safe_delete(call.message)   # вместо await call.message.delete()
+        await call.message.answer(...)    # отправляется всегда
     """
-    msg: types.Message = (
-        target.message if isinstance(target, types.CallbackQuery) else target
-    )
-    if msg is None:
-        return False
     try:
-        await msg.delete()
-        return True
-    except TelegramBadRequest as exc:
-        _text = str(exc).lower()
-        if any(marker in _text for marker in (
-            "message to delete not found",
-            "message can't be deleted",
-            "message is too old",
-        )):
-            logger.debug("safe_delete: skip — %s", exc)
-            return False
-        raise  # неожиданная ошибка — пробрасываем
+        await message.delete()
     except Exception as exc:
-        logger.warning("safe_delete: unexpected error — %s", exc)
-        return False
+        logger.debug("safe_delete: не удалось удалить сообщение %s: %s", message.message_id, exc)
