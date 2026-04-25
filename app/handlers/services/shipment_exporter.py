@@ -32,7 +32,7 @@ class ExcelExportService:
     - «цвет строго» (столбец 19 / S) — всегда 'да'.
     - «Цена доставки» (15 / O) — не трогаем.
     - «Цена (Юани)» (16 / P) — формула шаблона остаётся.
-    - Возвращаем путь к временному xlsx: cargo_<ID>_<YYYYMMDD>.xlsx — отправляешь уже в своём месте.
+    - Возвращаем путь к временному xlsx: cargo_<ID>_<YYYYMMDD>.xlsx.
     """
 
     PHOTO_COL_LETTER = "E"
@@ -460,12 +460,11 @@ class ExpeditionExportService:
       col C (3) = Наименование товара
       col D (4) = Кол-во единиц          ← количество (шт.)
       col E (5) = Единица измерения      ← всегда «шт.»
-      col F (6) = Общая стоимость (BYN)  ← price_usd * usd_to_byn * qty
+      col F (6) = Общая стоимость (BYN)  ← price_cny * yuan_to_byn * qty
 
-    Курс USD→BYN берётся из ENV USD_TO_BYN (по умолчанию 3.2).
+    Курс CNY→BYN берётся из ENV YUAN_TO_BYN (по умолчанию 0.34).
     """
 
-    # (min, max включительно, имя листа)
     SHEET_RANGES: List[Tuple[int, int, str]] = [
         (1,   31,  "1-31"),
         (32,  83,  "32-83"),
@@ -473,7 +472,7 @@ class ExpeditionExportService:
         (135, 185, "135-185"),
     ]
 
-    DATA_START_ROW: int = 14  # строка первой записи (1-based)
+    DATA_START_ROW: int = 14
 
     COL_NUM:   int = 2   # B
     COL_TITLE: int = 3   # C
@@ -485,16 +484,16 @@ class ExpeditionExportService:
         self,
         *,
         template_path: Optional[str] = None,
-        usd_to_byn: Optional[Decimal] = None,
+        yuan_to_byn: Optional[Decimal] = None,
     ) -> None:
         self.template_path = (
             template_path
             or os.getenv("EXPEDITION_XLSX_TEMPLATE")
             or os.path.join("media", "excel", "expedition.xlsx")
         )
-        env_rate = os.getenv("USD_TO_BYN") or "3.2"
-        self.usd_to_byn = (
-            Decimal(str(usd_to_byn)) if usd_to_byn is not None
+        env_rate = os.getenv("YUAN_TO_BYN") or "0.34"
+        self.yuan_to_byn = (
+            Decimal(str(yuan_to_byn)) if yuan_to_byn is not None
             else Decimal(env_rate)
         )
 
@@ -534,10 +533,10 @@ class ExpeditionExportService:
         for i, item in enumerate(items, start=1):
             row = self.DATA_START_ROW + (i - 1)
 
-            title     = item.get("title") or "Без названия"
-            qty       = int(item.get("quantity") or 0)
-            price_usd = Decimal(str(item.get("price") or 0))
-            total_byn = (price_usd * self.usd_to_byn * qty).quantize(
+            title    = item.get("title") or "Без названия"
+            qty      = int(item.get("quantity") or 0)
+            price_cny = Decimal(str(item.get("price") or 0))
+            total_byn = (price_cny * self.yuan_to_byn * qty).quantize(
                 Decimal("0.01")
             )
 
@@ -547,8 +546,8 @@ class ExpeditionExportService:
             ws.cell(row=row, column=self.COL_UNIT,  value="шт.")
             ws.cell(row=row, column=self.COL_PRICE, value=float(total_byn))
 
-        today    = datetime.now().strftime("%Y%m%d")
-        tmpdir   = tempfile.gettempdir()
+        today     = datetime.now().strftime("%Y%m%d")
+        tmpdir    = tempfile.gettempdir()
         file_path = os.path.join(
             tmpdir, f"expedition_{cargo_id}_{today}.xlsx"
         )
@@ -593,17 +592,18 @@ async def export_expedition(
     cargo_service,
     cargo_id: int,
     template_path: Optional[str] = None,
-    usd_to_byn: Optional[Decimal] = None,
+    yuan_to_byn: Optional[Decimal] = None,
 ) -> str:
     """
     Экспорт сопроводительного письма ТК Экспедиция.
 
     Бот автоматически выбирает нужный лист (1-31 / 32-83 / 84-134 / 135-185)
     по количеству товаров в посылке. Все единицы измерения — «шт.»
+    Цена конвертируется из CNY в BYN через курс YUAN_TO_BYN.
     """
     service = ExpeditionExportService(
         template_path=template_path,
-        usd_to_byn=usd_to_byn,
+        yuan_to_byn=yuan_to_byn,
     )
     return await service.generate(
         cargo_service=cargo_service,
