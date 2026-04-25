@@ -82,9 +82,9 @@ class AdminKB:
         b.button(text="🔖 Статусы",              callback_data=AdminFlowCallback(action="status",              id=cargo_id).pack())
         b.button(text="👥 Сводка по людям",       callback_data=AdminFlowCallback(action="summary",             id=cargo_id).pack())
         # Excel-экспорты — группа из 3 кнопок
-        b.button(text="📊 Excel 352",             callback_data=AdminFlowCallback(action="export_excel_352",     id=cargo_id).pack())
-        b.button(text="📊 Excel Садовод",         callback_data=AdminFlowCallback(action="export_excel_sadovod", id=cargo_id).pack())
-        b.button(text="🚛 ТК Экспедиция",         callback_data=AdminFlowCallback(action="export_excel_expedition", id=cargo_id).pack())
+        b.button(text="📊 Excel 352",             callback_data=AdminFlowCallback(action="export_excel_352",         id=cargo_id).pack())
+        b.button(text="📊 Excel Садовод",         callback_data=AdminFlowCallback(action="export_excel_sadovod",     id=cargo_id).pack())
+        b.button(text="📬 ТК Экспедиция",         callback_data=AdminFlowCallback(action="export_excel_expedition",  id=cargo_id).pack())
         # PDF-экспорт
         b.button(text="🧾 Экспорт товаров (PDF)", callback_data=AdminFlowCallback(action="export_items_pdf",     id=cargo_id).pack())
 
@@ -98,7 +98,7 @@ class AdminKB:
 
         # layout:
         # row 1: Статусы | Сводка (2)
-        # row 2: Excel 352 | Excel Садовод | ТК Экспедиция (3)
+        # row 2: Excel 352 | Excel Садовод | 📬 ТК Экспедиция (3)
         # row 3: Экспорт товаров PDF (1)
         # row 4 (опционально): Отправить посылку (1)
         # row last: Назад (1)
@@ -130,7 +130,7 @@ class AdminKB:
         b.button(text="💳 Аванс ($)",   callback_data=AdminFlowCallback(action="payment", status="advance").pack())
         b.button(text="🔁 Возврат ($)", callback_data=AdminFlowCallback(action="payment", status="refund").pack())
         b.button(text="🧩 Другое ($)",  callback_data=AdminFlowCallback(action="payment", status="other").pack())
-        b.button(text="⬅ Назад",        callback_data=AdminFlowCallback(action="summary", id=cargo_id).pack())
+        b.button(text="⬅ Назад",        callback_data=AdminFlowCallback(action="back", id=cargo_id).pack())
         b.adjust(2, 2, 2, 1)
         return b.as_markup()
 

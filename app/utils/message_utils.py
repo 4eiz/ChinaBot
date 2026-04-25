@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from aiogram import types
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +15,11 @@ async def safe_delete(message: types.Message) -> None:
     """
     Пытается удалить сообщение.
 
-    Если удаление невозможно (сообщение слишком старое, уже удалено,
-    нет прав и т.д.) — тихо пропускает ошибку и продолжает выполнение.
-    Это гарантирует, что бот ВСЕГДА отправит следующее сообщение,
-    даже если старое удалить не получилось.
+    Если удаление невозможно (сообщение старше 48 ч, уже удалено,
+    нет прав, flood wait и т.д.) — тихо пропускает ошибку.
+
+    Бот ВСЕГДА продолжает выполнение и отправляет следующее сообщение
+    — независимо от результата удаления.
 
     Использование:
         from app.utils import safe_delete
@@ -27,5 +29,11 @@ async def safe_delete(message: types.Message) -> None:
     """
     try:
         await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
     except Exception as exc:
-        logger.debug("safe_delete: не удалось удалить сообщение %s: %s", message.message_id, exc)
+        logger.debug(
+            "safe_delete: не удалось удалить message_id=%s: %s",
+            getattr(message, "message_id", "?"),
+            exc,
+        )

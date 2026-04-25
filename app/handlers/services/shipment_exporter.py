@@ -403,74 +403,38 @@ class ExcelTextFormExportService:
 
         today = datetime.now().strftime("%Y%m%d")
         tmpdir = tempfile.gettempdir()
-        file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_{today}_form.xlsx")
+        file_path = os.path.join(tmpdir, f"sadovod_{cargo_id}_{today}.xlsx")
 
         wb = load_workbook(self.template_path)
-        ws = wb[self.sheet_name] if (self.sheet_name and self.sheet_name in wb.sheetnames) else wb.active
+        sheet = wb[self.sheet_name] if self.sheet_name and self.sheet_name in wb.sheetnames else wb.active
 
-        start_row = self.start_row
-        end_row = self.end_row
-        template_row = start_row
-        max_existing = end_row - start_row + 1
+        total_row = await self._find_total_row(sheet)
+        if total_row:
+            await self._cache_total_row(sheet, total_row)
+            sheet.delete_rows(total_row)
 
-        total_row_original = await self._find_total_row(ws)
-        if total_row_original is None:
-            wb.close()
-            raise RuntimeError(f"Не найдена строка с текстом '{self.total_label}'")
+        template_data_rows = self.end_row - self.start_row + 1
+        if rows_count > template_data_rows:
+            extra = rows_count - template_data_rows
+            insert_at = self.end_row + 1
+            sheet.insert_rows(insert_at, amount=extra)
+            for i in range(extra):
+                await self._copy_row_format(sheet, self.start_row, insert_at + i)
 
-        move_threshold = int(getattr(self, "move_total_threshold", 29))
-        move_total = rows_count > move_threshold
-
-        if move_total:
-            await self._cache_total_row(ws, total_row_original)
-            await self._remove_merged_ranges_on_row(ws, total_row_original)
-            ws.delete_rows(total_row_original)
-
-        if move_total:
-            capacity = max_existing
-        else:
-            capacity = min(max_existing, (total_row_original - start_row))
-
-        rows_written = 0
-        write_count = min(rows_count, capacity)
-        for i in range(write_count):
-            row_idx = start_row + i
-            r = rows[i]
-            await self._safe_set_cell(ws, row_idx, 2, i + 1)
+        for i, row_data in enumerate(rows):
+            excel_row = self.start_row + i
             for col in self.column_mapping["title"]:
-                await self._safe_set_cell(ws, row_idx, col, r["title"])
+                await self._safe_set_cell(sheet, excel_row, col, row_data["title"])
             for col in self.column_mapping["unit"]:
-                await self._safe_set_cell(ws, row_idx, col, r["unit"])
+                await self._safe_set_cell(sheet, excel_row, col, row_data["unit"])
             for col in self.column_mapping["qty"]:
-                await self._safe_set_cell(ws, row_idx, col, r["qty"])
+                await self._safe_set_cell(sheet, excel_row, col, row_data["qty"])
             for col in self.column_mapping["unit_price"]:
-                await self._safe_set_cell(ws, row_idx, col, r["unit_price_rub"])
+                await self._safe_set_cell(sheet, excel_row, col, float(row_data["unit_price_rub"]))
 
-        rows_written = write_count
-
-        if move_total and rows_count > capacity:
-            for i in range(capacity, rows_count):
-                row_idx = start_row + i
-                ws.insert_rows(row_idx)
-                await self._copy_row_format(ws, template_row, row_idx)
-                await self._move_merged_cells(ws, template_row, row_idx)
-
-                r = rows[i]
-                await self._safe_set_cell(ws, row_idx, 2, i + 1)
-                for col in self.column_mapping["title"]:
-                    await self._safe_set_cell(ws, row_idx, col, r["title"])
-                for col in self.column_mapping["unit"]:
-                    await self._safe_set_cell(ws, row_idx, col, r["unit"])
-                for col in self.column_mapping["qty"]:
-                    await self._safe_set_cell(ws, row_idx, col, r["qty"])
-                for col in self.column_mapping["unit_price"]:
-                    await self._safe_set_cell(ws, row_idx, col, r["unit_price_rub"])
-
-            rows_written = rows_count
-
-        if move_total:
-            final_row = start_row + rows_written
-            await self._restore_total_row(ws, final_row)
+        if total_row:
+            new_total_row = self.start_row + rows_count
+            await self._restore_total_row(sheet, new_total_row)
 
         wb.save(file_path)
         wb.close()
@@ -478,62 +442,44 @@ class ExcelTextFormExportService:
 
 
 # ============================================================
-# 3) ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву)
+# 3) ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву товаров)
 # ============================================================
-#
-# Структура шаблона (файл ТК_Экспедиция_Южные ворота.xlsx):
-#   Лист «Образец»   — пример заполнения (не трогаем)
-#   Лист «1-31»      — 1–31  товаров
-#   Лист «32-83»     — 32–83  товара
-#   Лист «84-134»    — 84–134 товара
-#   Лист «135-185»   — 135–185 товаров
-#
-# Колонки в каждом рабочем листе (по образцу):
-#   A(1) — пустая / структурная
-#   B(2) — №  (порядковый номер)
-#   C(3) — Наименование товара (точное название)
-#   D(4) — Кол-во единиц                     → всегда «шт.» (штук)
-#   E(5) — Единица измерения                 → ВСЕГДА «шт.»
-#   F(6) — Общая стоимость в бел. рублях (BYN)
-#
-# Цена: item.price хранится в USD.
-# Конвертация: total_byn = price_usd * usd_to_byn * qty
-# Курс по умолчанию: 1 USD = 2.9 BYN (env USD_TO_BYN)
 
-_EXPEDITION_SHEET_RANGES: List[Tuple[int, int, str]] = [
-    (1,   31,  "1-31"),
-    (32,  83,  "32-83"),
-    (84,  134, "84-134"),
-    (135, 185, "135-185"),
-]
-
-
-class ExcelExpeditionExportService:
+class ExpeditionExportService:
     """
-    Экспорт ТК «Экспедиция — Южные ворота» (сопроводительное письмо).
+    Экспорт сопроводительного письма для ТК Экспедиция (Южные ворота).
 
-    Алгоритм:
-      1. Считаем кол-во товаров в посылке.
-      2. Автоматически выбираем нужный лист шаблона:
-           1–31   → «1-31»
-           32–83  → «32-83»
-           84–134 → «84-134»
-           135–185 → «135-185»
-      3. Находим первую строку данных (ищем «1» в колонке B).
-      4. Заполняем строки:
-           B = №, C = Наименование, D = Кол-во (шт.), E = «шт.», F = Стоимость (BYN)
-      5. Единица измерения — ВСЕГДА «шт.» (требование ТК).
-      6. Стоимость: price_usd * usd_to_byn * qty  (курс 1 USD = 2.9 BYN по умолчанию).
+    Автоматически выбирает лист шаблона по количеству позиций в посылке:
+      1–31    → «1-31»
+      32–83   → «32-83»
+      84–134  → «84-134»
+      135–185 → «135-185»
+
+    Структура листа (1-based, данные с DATA_START_ROW):
+      col B (2) = №
+      col C (3) = Наименование товара
+      col D (4) = Кол-во единиц          ← количество (шт.)
+      col E (5) = Единица измерения      ← всегда «шт.»
+      col F (6) = Общая стоимость (BYN)  ← price_usd * usd_to_byn * qty
+
+    Курс USD→BYN берётся из ENV USD_TO_BYN (по умолчанию 3.2).
     """
 
-    _DATA_SEARCH_MAX_ROW: int = 30
+    # (min, max включительно, имя листа)
+    SHEET_RANGES: List[Tuple[int, int, str]] = [
+        (1,   31,  "1-31"),
+        (32,  83,  "32-83"),
+        (84,  134, "84-134"),
+        (135, 185, "135-185"),
+    ]
 
-    # Колонки по структуре шаблона (1-based)
-    _COL_NUM   = 2   # B — №
-    _COL_TITLE = 3   # C — Наименование товара
-    _COL_QTY   = 4   # D — Кол-во единиц
-    _COL_UNIT  = 5   # E — Единица измерения (всегда «шт.»)
-    _COL_PRICE = 6   # F — Общая стоимость в бел. рублях (BYN)
+    DATA_START_ROW: int = 14  # строка первой записи (1-based)
+
+    COL_NUM:   int = 2   # B
+    COL_TITLE: int = 3   # C
+    COL_QTY:   int = 4   # D
+    COL_UNIT:  int = 5   # E
+    COL_PRICE: int = 6   # F
 
     def __init__(
         self,
@@ -541,148 +487,78 @@ class ExcelExpeditionExportService:
         template_path: Optional[str] = None,
         usd_to_byn: Optional[Decimal] = None,
     ) -> None:
-        """
-        :param template_path: путь к шаблону ТК Экспедиция;
-                              env EXPEDITION_XLSX_TEMPLATE или media/excel/expedition.xlsx
-        :param usd_to_byn:    курс USD→BYN; env USD_TO_BYN или 2.9 по умолчанию
-        """
         self.template_path = (
             template_path
             or os.getenv("EXPEDITION_XLSX_TEMPLATE")
             or os.path.join("media", "excel", "expedition.xlsx")
         )
-        env_rate = os.getenv("USD_TO_BYN") or "2.9"
+        env_rate = os.getenv("USD_TO_BYN") or "3.2"
         self.usd_to_byn = (
-            Decimal(str(usd_to_byn))
-            if usd_to_byn is not None
+            Decimal(str(usd_to_byn)) if usd_to_byn is not None
             else Decimal(env_rate)
         )
 
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
+    def _select_sheet(self, items_count: int) -> str:
+        for min_val, max_val, sheet_name in self.SHEET_RANGES:
+            if min_val <= items_count <= max_val:
+                return sheet_name
+        raise RuntimeError(
+            f"Количество позиций ({items_count}) превышает максимум (185). "
+            f"Разбейте посылку на несколько."
+        )
 
-    @staticmethod
-    def _select_sheet_name(items_count: int) -> str:
-        """
-        Возвращает имя листа по количеству товаров.
-        0 товаров → «1-31» (минимальный лист).
-        > 185 → «135-185» (максимальный лист).
-        """
-        for lo, hi, name in _EXPEDITION_SHEET_RANGES:
-            if lo <= items_count <= hi:
-                return name
-        if items_count == 0:
-            return _EXPEDITION_SHEET_RANGES[0][2]   # «1-31»
-        return _EXPEDITION_SHEET_RANGES[-1][2]       # «135-185»
-
-    @staticmethod
-    def _find_data_start_row(ws, max_search: int = 30) -> int:
-        """
-        Ищет первую строку, где в колонке B(2) стоит число 1 —
-        это начало таблицы данных.
-        Если не найдено — возвращает max_search + 1 как fallback.
-        """
-        col = ExcelExpeditionExportService._COL_NUM
-        for r in range(1, max_search + 1):
-            val = ws.cell(row=r, column=col).value
-            if val == 1 or val == "1":
-                return r
-        return max_search + 1
-
-    @staticmethod
-    async def _safe_write(ws, row: int, col: int, value) -> None:
-        """Пишет значение, обходя MergedCell."""
-        cell = ws.cell(row=row, column=col)
-        if type(cell).__name__ == "MergedCell":
-            for merged in ws.merged_cells.ranges:
-                if cell.coordinate in merged:
-                    ws.cell(row=merged.min_row, column=merged.min_col).value = value
-                    return
-        else:
-            cell.value = value
-
-    async def _load_items(self, cargo_service, cargo_id: int) -> List[dict]:
-        """Загружает товары из БД и формирует строки для Excel.
-
-        price хранится в USD → конвертируем в BYN по курсу self.usd_to_byn.
-        total_byn = price_usd * usd_to_byn * qty
-        """
-        items = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
-        result: List[dict] = []
-        for it in items:
-            title      = it.get("title") or "Без названия"
-            qty        = int(it.get("quantity") or 1)
-            price_usd  = Decimal(str(it.get("price") or 0))
-            total_byn  = (price_usd * self.usd_to_byn * qty).quantize(Decimal("0.01"))
-            result.append({
-                "title":     title,
-                "qty":       qty,
-                "unit":      "шт.",       # ВСЕГДА «шт.» — требование ТК Экспедиция
-                "total_byn": total_byn,
-            })
-        return result
-
-    # ------------------------------------------------------------------
-    # публичный метод
-    # ------------------------------------------------------------------
-
-    async def generate(
-        self,
-        *,
-        cargo_service,
-        cargo_id: int,
-    ) -> str:
-        """
-        Заполняет шаблон ТК Экспедиция и возвращает путь к временному xlsx.
-
-        :param cargo_service: CargoService
-        :param cargo_id:      ID посылки
-        :return:              /tmp/expedition_<cargo_id>_<YYYYMMDD>.xlsx
-        """
+    async def generate(self, *, cargo_service, cargo_id: int) -> str:
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(
-                f"Excel-шаблон ТК Экспедиция не найден: {self.template_path}\n"
-                f"Положите файл по пути: {self.template_path}"
+                f"Шаблон ТК Экспедиция не найден: {self.template_path}\n"
+                f"Положите файл в media/excel/expedition.xlsx"
             )
 
-        items = await self._load_items(cargo_service, cargo_id)
-        count = len(items)
-        sheet_name = self._select_sheet_name(count)
+        items: List[dict] = await cargo_service.items.list_by_cargo(
+            cargo_id=cargo_id
+        )
+        if not items:
+            raise RuntimeError("Посылка не содержит товаров.")
+
+        sheet_name = self._select_sheet(len(items))
 
         wb = load_workbook(self.template_path)
-
         if sheet_name not in wb.sheetnames:
-            available = ", ".join(f"'{s}'" for s in wb.sheetnames)
-            wb.close()
             raise RuntimeError(
-                f"Лист '{sheet_name}' не найден в шаблоне. "
-                f"Доступные листы: {available}"
+                f"Лист «{sheet_name}» не найден в шаблоне ТК Экспедиции. "
+                f"Убедитесь, что файл expedition.xlsx содержит листы: "
+                f"1-31, 32-83, 84-134, 135-185."
+            )
+        ws = wb[sheet_name]
+
+        for i, item in enumerate(items, start=1):
+            row = self.DATA_START_ROW + (i - 1)
+
+            title     = item.get("title") or "Без названия"
+            qty       = int(item.get("quantity") or 0)
+            price_usd = Decimal(str(item.get("price") or 0))
+            total_byn = (price_usd * self.usd_to_byn * qty).quantize(
+                Decimal("0.01")
             )
 
-        ws = wb[sheet_name]
-        data_start = self._find_data_start_row(ws, self._DATA_SEARCH_MAX_ROW)
+            ws.cell(row=row, column=self.COL_NUM,   value=i)
+            ws.cell(row=row, column=self.COL_TITLE, value=str(title))
+            ws.cell(row=row, column=self.COL_QTY,   value=qty)
+            ws.cell(row=row, column=self.COL_UNIT,  value="шт.")
+            ws.cell(row=row, column=self.COL_PRICE, value=float(total_byn))
 
-        for idx, it in enumerate(items):
-            row = data_start + idx
-            await self._safe_write(ws, row, self._COL_NUM,   idx + 1)
-            await self._safe_write(ws, row, self._COL_TITLE, it["title"])
-            await self._safe_write(ws, row, self._COL_QTY,   it["qty"])
-            await self._safe_write(ws, row, self._COL_UNIT,  it["unit"])   # «шт.»
-            await self._safe_write(ws, row, self._COL_PRICE, float(it["total_byn"]))
-
-        today = datetime.now().strftime("%Y%m%d")
-        tmpdir = tempfile.gettempdir()
-        out_path = os.path.join(
+        today    = datetime.now().strftime("%Y%m%d")
+        tmpdir   = tempfile.gettempdir()
+        file_path = os.path.join(
             tmpdir, f"expedition_{cargo_id}_{today}.xlsx"
         )
-        wb.save(out_path)
+        wb.save(file_path)
         wb.close()
-        return out_path
+        return file_path
 
 
 # ============================================================
-# 4) ФАСАДЫ
+# Публичные фасадные функции
 # ============================================================
 
 async def export_cn_msk_goods(
@@ -691,18 +567,11 @@ async def export_cn_msk_goods(
     cargo_service,
     cargo_id: int,
     template_path: Optional[str] = None,
-    max_concurrency: int = 8,
-    photo_inner_padding_px: int = 6,
 ) -> str:
-    """Фасад для CN→MSK (с фото)."""
-    svc = ExcelExportService(
-        bot=bot,
-        template_path=template_path,
-        max_concurrency=max_concurrency,
-        photo_inner_padding_px=photo_inner_padding_px,
-    )
-    return await svc.generate_goods_sheet(
-        cargo_service=cargo_service, cargo_id=cargo_id
+    service = ExcelExportService(bot=bot, template_path=template_path)
+    return await service.generate_goods_sheet(
+        cargo_service=cargo_service,
+        cargo_id=cargo_id,
     )
 
 
@@ -711,23 +580,11 @@ async def export_text_form(
     cargo_service,
     cargo_id: int,
     template_path: Optional[str] = None,
-    sheet_name: Optional[str] = None,
-    start_row: int = 5,
-    end_row: int = 33,
-    total_label: str = "Всего",
-    yuan_to_rub: Optional[Decimal] = None,
 ) -> str:
-    """Фасад для текстового бланка Садовод (без фото)."""
-    svc = ExcelTextFormExportService(
-        template_path=template_path,
-        sheet_name=sheet_name,
-        start_row=start_row,
-        end_row=end_row,
-        total_label=total_label,
-        yuan_to_rub=yuan_to_rub,
-    )
-    return await svc.generate_text_form(
-        cargo_service=cargo_service, cargo_id=cargo_id
+    service = ExcelTextFormExportService(template_path=template_path)
+    return await service.generate_text_form(
+        cargo_service=cargo_service,
+        cargo_id=cargo_id,
     )
 
 
@@ -738,15 +595,17 @@ async def export_expedition(
     template_path: Optional[str] = None,
     usd_to_byn: Optional[Decimal] = None,
 ) -> str:
-    """Фасад для ТК Экспедиция — Южные ворота.
-
-    Авто-выбор листа по кол-ву товаров.
-    Цена в BYN: price_usd * usd_to_byn * qty (курс 1 USD = 2.9 BYN по умолчанию).
     """
-    svc = ExcelExpeditionExportService(
+    Экспорт сопроводительного письма ТК Экспедиция.
+
+    Бот автоматически выбирает нужный лист (1-31 / 32-83 / 84-134 / 135-185)
+    по количеству товаров в посылке. Все единицы измерения — «шт.»
+    """
+    service = ExpeditionExportService(
         template_path=template_path,
         usd_to_byn=usd_to_byn,
     )
-    return await svc.generate(
-        cargo_service=cargo_service, cargo_id=cargo_id
+    return await service.generate(
+        cargo_service=cargo_service,
+        cargo_id=cargo_id,
     )
