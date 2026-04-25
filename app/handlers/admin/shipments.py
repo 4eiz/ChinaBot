@@ -7,6 +7,7 @@ from config import CLEAR_RATE
 
 from keyboards import AdminFlowCallback, AdminKB
 from app.handlers.services.pdf_export import PDFExportService
+from app.utils import safe_delete
 from media import PhotoBank
 
 
@@ -41,7 +42,7 @@ class AdminShipments:
 
 
     async def menu(self, call: types.CallbackQuery):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         is_admin = await self.users.is_admin(user_id=call.from_user.id)
         if not is_admin:
@@ -57,7 +58,7 @@ class AdminShipments:
 
 
     async def shipments(self, call: types.CallbackQuery, callback_data: AdminFlowCallback | None = None):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         is_admin = await self.users.is_admin(user_id=call.from_user.id)
         if not is_admin:
@@ -97,7 +98,7 @@ class AdminShipments:
 
 
     async def open_shipment(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
 
@@ -163,7 +164,7 @@ class AdminShipments:
 
 
     async def status_menu(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
         cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
@@ -183,7 +184,7 @@ class AdminShipments:
 
     async def status_set(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
         cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
@@ -255,7 +256,7 @@ class AdminShipments:
 
 
     async def users_summary(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
         cargo_id = callback_data.id
         settle = await self.cargo.settlement_by_cargo(cargo_id=cargo_id)
 
@@ -319,7 +320,7 @@ class AdminShipments:
             if not file_id:
                 continue
             try:
-                tg_file = await bot.get_file(file_id)  # aiogram 3.x
+                tg_file = await bot.get_file(file_id)
                 buf = BytesIO()
                 await bot.download(tg_file, destination=buf)
                 result[it["id"]] = buf.getvalue()

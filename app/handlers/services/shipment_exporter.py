@@ -36,21 +36,6 @@ class ExcelExportService:
     """
 
     PHOTO_COL_LETTER = "E"
-    # Индексы колонок соответствуют ТЕКУЩЕМУ шаблону cargo.xlsx (см. заголовки в файле).
-    #
-    # A  1  — №
-    # C  3  — Наименование
-    # D  4  — Ссылка
-    # E  5  — Фото
-    # F  6  — Цвет
-    # G  7  — Материал
-    # H  8  — "中文品名" / Китайское наименование
-    # I  9  — Бренд
-    # J 10  — Размер
-    # K 11  — Примечания
-    # M 13  — Кол-во
-    # N 14  — Цена за 1 ед. (¥)
-    # S 19  — цвет строго
     COL_INDEX = {
         "num": 1,              # A
         "title": 3,            # C
@@ -74,12 +59,6 @@ class ExcelExportService:
         max_concurrency: int = 8,
         photo_inner_padding_px: int = 6,
     ) -> None:
-        """
-        :param bot: aiogram Bot — для скачивания фото по file_id
-        :param template_path: путь к Excel-шаблону; по умолчанию: env CARGO_XLSX_TEMPLATE или media/cargo.xlsx
-        :param max_concurrency: параллельность скачивания фото
-        :param photo_inner_padding_px: отступ внутри клетки (px) — чтобы фото было чуть меньше рамки
-        """
         self.bot = bot
         self.template_path = (
             template_path
@@ -89,11 +68,8 @@ class ExcelExportService:
         self.sema = asyncio.Semaphore(int(max_concurrency))
         self.photo_inner_padding_px = int(photo_inner_padding_px)
 
-    # ---------- helpers: размеры, загрузка, подготовка изображений ----------
-
     @staticmethod
     async def _notes_from_extra(extra: object) -> str:
-        """ Оставляем только «человеческие» примечания, без JSON-шума. """
         KEYS = ("note", "comment", "备注", "примечание", "notes")
         if extra is None:
             return ""
@@ -117,7 +93,6 @@ class ExcelExportService:
 
     @staticmethod
     async def _extra_field(extra: object, keys: Tuple[str, ...]) -> str:
-        """Достаём значение из extra (dict или JSON-строка) по списку ключей."""
         if extra is None:
             return ""
         if isinstance(extra, dict):
@@ -140,11 +115,11 @@ class ExcelExportService:
 
     @staticmethod
     async def _points_to_pixels(points: float) -> float:
-        return points * 4.0 / 3.0  # 1pt ~ 1.3333 px
+        return points * 4.0 / 3.0
 
     @staticmethod
     async def _col_width_chars_to_pixels(chars_width: float) -> float:
-        return chars_width * 7.0  # грубое, но устойчивое приближение
+        return chars_width * 7.0
 
     @staticmethod
     async def _worksheet_default_row_height_pt(ws: Worksheet) -> float:
@@ -155,15 +130,12 @@ class ExcelExportService:
         return float(getattr(ws.sheet_format, "defaultColWidth", 8.43) or 8.43)
 
     async def _get_cell_box_pixels(self, ws: Worksheet, row: int, col_letter: str) -> Tuple[int, int]:
-        """ Возвращает фактический размер ячейки (ширина/высота) в пикселях. Ничего не меняем в листе. """
-        # width
         col_dim = ws.column_dimensions.get(col_letter)
         if col_dim and col_dim.width:
             col_chars = float(col_dim.width)
         else:
             col_chars = await self._worksheet_default_col_width_chars(ws)
         width_px = await self._col_width_chars_to_pixels(col_chars)
-        # height
         row_dim = ws.row_dimensions.get(row)
         if row_dim and row_dim.height:
             row_pt = float(row_dim.height)
@@ -173,7 +145,6 @@ class ExcelExportService:
         return int(width_px), int(height_px)
 
     async def _download_photo_bytes(self, file_id: Optional[str]) -> Optional[bytes]:
-        """ Скачивает файл из Telegram по file_id. Возвращает bytes или None. """
         if not file_id:
             return None
         async with self.sema:
@@ -192,10 +163,6 @@ class ExcelExportService:
         box_h_px: int,
         padding_px: int,
     ) -> Optional[Tuple[bytes, int, int]]:
-        """
-        Вписывает изображение в бокс ячейки (минус паддинги), без изменения пропорций.
-        Возвращает PNG-байты и фактический (w,h) в пикселях.
-        """
         def _work() -> Optional[Tuple[bytes, int, int]]:
             try:
                 img = PILImage.open(io.BytesIO(raw)).convert("RGB")
@@ -214,30 +181,16 @@ class ExcelExportService:
                 return None
         return await asyncio.to_thread(_work)
 
-    # ---------- публичный метод ----------
-
     async def generate_goods_sheet(self, *, cargo_service, cargo_id: int) -> str:
-        """
-        Генерирует Excel по шаблону «Товары» для CN→MSK, возвращает путь к временному файлу.
-
-        :param cargo_service: твой CargoService (async), должен уметь: items.list_by_cargo(cargo_id)
-        :param cargo_id: ID посылки
-        :return: str — /tmp/cargo_<ID>_<YYYYMMDD>.xlsx
-        """
-        # товары
         items: List[dict] = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
         file_ids = [it.get("photo_file_id") for it in items]
-
-        # фото параллельно
         photos_raw = await asyncio.gather(*[self._download_photo_bytes(fid) for fid in file_ids])
 
-        # шаблон
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(f"Excel-шаблон не найден: {self.template_path}")
         wb = load_workbook(self.template_path)
         ws = wb["Товары"] if "Товары" in wb.sheetnames else wb.active
 
-        # заполнение
         row = 2
         cell = ws.cell
         for i, it in enumerate(items, 1):
@@ -249,7 +202,6 @@ class ExcelExportService:
             price = it.get("price") or 0
             notes = await self._notes_from_extra(it.get("extra"))
 
-            # Доп. поля под новый шаблон — берём из extra (если есть)
             extra = it.get("extra")
             material = await self._extra_field(extra, ("material", "материал", "Материал", "材质"))
             cn_title = await self._extra_field(extra, (
@@ -272,9 +224,8 @@ class ExcelExportService:
             except Exception:
                 unit_price = 0.0
             cell(row=row, column=self.COL_INDEX["unit_price"], value=unit_price)
-            cell(row=row, column=self.COL_INDEX["strict_color"], value="да")  # цвет строго
+            cell(row=row, column=self.COL_INDEX["strict_color"], value="да")
 
-            # фото: вписываем по центру клетки
             raw = photos_raw[i - 1]
             if raw:
                 box_w_px, box_h_px = await self._get_cell_box_pixels(ws, row=row, col_letter=self.PHOTO_COL_LETTER)
@@ -291,15 +242,14 @@ class ExcelExportService:
                     xl_img.width = w_px
                     xl_img.height = h_px
 
-                    # центрирование в пределах ячейки
                     offset_x = max(0, (box_w_px - w_px) // 2)
                     offset_y = max(0, (box_h_px - h_px) // 2)
 
                     col_idx_1based = column_index_from_string(self.PHOTO_COL_LETTER)
                     marker = AnchorMarker(
-                        col=col_idx_1based - 1,         # zero-based
-                        colOff=offset_x * 9525,         # 1 px = 9525 EMUs
-                        row=row - 1,                    # zero-based
+                        col=col_idx_1based - 1,
+                        colOff=offset_x * 9525,
+                        row=row - 1,
                         rowOff=offset_y * 9525,
                     )
                     ext = XDRPositiveSize2D(cx=w_px * 9525, cy=h_px * 9525)
@@ -308,7 +258,6 @@ class ExcelExportService:
 
             row += 1
 
-        # сохранить во временный файл
         today = datetime.now().strftime("%Y%m%d")
         tmpdir = tempfile.gettempdir()
         file_path = os.path.join(tmpdir, f"cargo_{cargo_id}_{today}.xlsx")
@@ -318,17 +267,12 @@ class ExcelExportService:
 
 
 # ============================================================
-# 2) Текстовый бланк (второй шаблон, БЕЗ фото)
-#    — наполнение из БД, без чтения других Excel.
+# 2) Текстовый бланк «Садовод» (без фото)
 # ============================================================
 
 class ExcelTextFormExportService:
     """
     Экспорт «текстового» бланка (второй шаблон, без фото) из БД.
-
-    - Берём товары из БД и заполняем «кривой» шаблон: копируем формат эталонной строки,
-      учитываем мерджи, строку «Всего» переносим вниз.
-    - Возвращаем путь к временному файлу cargo_<ID>_<YYYYMMDD>_form.xlsx.
     """
 
     def __init__(
@@ -341,14 +285,6 @@ class ExcelTextFormExportService:
         total_label: str = "Всего",
         yuan_to_rub: Optional[Decimal] = None,
     ) -> None:
-        """
-        :param template_path: путь к шаблону текстового бланка (обязателен)
-        :param sheet_name: имя листа (если None — active)
-        :param start_row: первая строка таблицы в шаблоне
-        :param end_row: последняя «готовая» строка таблицы в шаблоне
-        :param total_label: текст, по которому ищем строку «Всего»
-        :param yuan_to_rub: курс CNY→RUB (если None — env YUAN_TO_RUB или 15)
-        """
         self.template_path = (
             template_path
             or os.getenv("CARGO_XLSX_TEMPLATE")
@@ -364,15 +300,12 @@ class ExcelTextFormExportService:
         self.yuan_to_rub = Decimal(str(yuan_to_rub)) if yuan_to_rub is not None else Decimal(env_rate)
         self._total_row_cache: Dict[int, dict] = {}
 
-        # Маппинг колонок под «кривой» бланк (поправим после получения твоего точного шаблона)
         self.column_mapping = {
-            "title":       list(range(3,  9)),   # C–H
-            "unit":        list(range(12, 14)),  # L–M
-            "qty":         list(range(18, 22)),  # R–U
-            "unit_price":  list(range(22, 27)),  # V–Z
+            "title":       list(range(3,  9)),
+            "unit":        list(range(12, 14)),
+            "qty":         list(range(18, 22)),
+            "unit_price":  list(range(22, 27)),
         }
-
-    # ---------- helpers: стили, мерджи, поиск «Всего», запись в мерджи ----------
 
     async def _copy_row_format(self, sheet, source_row: int, target_row: int) -> None:
         for col in range(1, sheet.max_column + 1):
@@ -450,8 +383,6 @@ class ExcelTextFormExportService:
         else:
             cell.value = value
 
-    # ---------- БД → плоские строки ----------
-
     async def _load_rows_from_db(self, cargo_service, cargo_id: int) -> List[dict]:
         items = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
         rows: List[dict] = []
@@ -463,16 +394,7 @@ class ExcelTextFormExportService:
             rows.append({"title": title, "qty": qty, "unit": "штука, шт.", "unit_price_rub": rub})
         return rows
 
-    # ---------- публичный метод ----------
-
     async def generate_text_form(self, *, cargo_service, cargo_id: int) -> str:
-        """
-        Заполняет «текстовый» шаблон (без фото) из БД и возвращает путь к временному файлу.
-
-        :param cargo_service: твой CargoService (async)
-        :param cargo_id: ID посылки
-        :return: str — /tmp/cargo_<ID>_<YYYYMMDD>_form.xlsx
-        """
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(f"Excel-шаблон не найден: {self.template_path}")
 
@@ -491,37 +413,30 @@ class ExcelTextFormExportService:
         template_row = start_row
         max_existing = end_row - start_row + 1
 
-        # --- строка «Всего» ---
         total_row_original = await self._find_total_row(ws)
         if total_row_original is None:
             wb.close()
             raise RuntimeError(f"Не найдена строка с текстом '{self.total_label}'")
 
-        # Порог: переносить «Всего» вниз только если товаров > 29
         move_threshold = int(getattr(self, "move_total_threshold", 29))
         move_total = rows_count > move_threshold
 
         if move_total:
-            # переносим «Всего»: кешируем -> размерживаем -> удаляем
             await self._cache_total_row(ws, total_row_original)
             await self._remove_merged_ranges_on_row(ws, total_row_original)
             ws.delete_rows(total_row_original)
 
-        # Сколько строк доступно «не задевая» строку «Всего», если её не переносим
         if move_total:
             capacity = max_existing
         else:
-            # не пишем поверх исходной строки «Всего»
             capacity = min(max_existing, (total_row_original - start_row))
 
-        # --- заполняем уже существующие строки в шаблоне ---
         rows_written = 0
         write_count = min(rows_count, capacity)
         for i in range(write_count):
             row_idx = start_row + i
             r = rows[i]
-            await self._safe_set_cell(ws, row_idx, 2, i + 1)  # №
-
+            await self._safe_set_cell(ws, row_idx, 2, i + 1)
             for col in self.column_mapping["title"]:
                 await self._safe_set_cell(ws, row_idx, col, r["title"])
             for col in self.column_mapping["unit"]:
@@ -533,7 +448,6 @@ class ExcelTextFormExportService:
 
         rows_written = write_count
 
-        # --- если данных больше, чем влезает в шаблон, ДОБАВЛЯЕМ строки ТОЛЬКО когда переносим «Всего» ---
         if move_total and rows_count > capacity:
             for i in range(capacity, rows_count):
                 row_idx = start_row + i
@@ -554,51 +468,250 @@ class ExcelTextFormExportService:
 
             rows_written = rows_count
 
-        # --- вернуть «Всего» ---
         if move_total:
-            # если переносили — вставляем «Всего» сразу после последней записанной строки
             final_row = start_row + rows_written
             await self._restore_total_row(ws, final_row)
-        else:
-            # если НЕ переносили — «Всего» оставалась на месте, ничего не делаем
-            pass
 
         wb.save(file_path)
         wb.close()
         return file_path
 
 
+# ============================================================
+# 3) ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву)
+# ============================================================
+#
+# Структура шаблона (файл ТК_Экспедиция_Южные ворота.xlsx):
+#   Лист «Образец»  — пример заполнения (не трогаем)
+#   Лист «1-31»     — 1-31  товаров
+#   Лист «32-83»    — 32-83 товара
+#   Лист «84-134»   — 84-134 товара
+#   Лист «135-185»  — 135-185 товаров
+#
+# Колонки в каждом рабочем листе (по образцу):
+#   A(1) — пустая / структурная
+#   B(2) — №  (порядковый номер)
+#   C(3) — Наименование товара (точное название)
+#   D(4) — Кол-во единиц
+#   E(5) — Единица измерения  → ВСЕГДА «шт.»
+#   F(6) — Общая стоимость в бел. рублях
+#
+# Строка «Итоговая стоимость» определяется автоматически по
+# наличию этой строки в колонке B или C.
+
+_EXPEDITION_SHEET_RANGES: List[Tuple[int, int, str]] = [
+    (1,   31,  "1-31"),
+    (32,  83,  "32-83"),
+    (84,  134, "84-134"),
+    (135, 185, "135-185"),
+]
+
+
+class ExcelExpeditionExportService:
+    """
+    Экспорт ТК «Экспедиция — Южные ворота» (сопроводительное письмо).
+
+    Алгоритм:
+      1. Считаем кол-во товаров в посылке.
+      2. Автоматически выбираем нужный лист шаблона:
+           1–31   → «1-31»
+           32–83  → «32-83»
+           84–134 → «84-134»
+           135–185 → «135-185»
+      3. Находим первую строку данных (ищем «1» в колонке B).
+      4. Заполняем строки:
+           B = №, C = Наименование, D = Кол-во, E = «шт.», F = Стоимость (BYN)
+      5. Единица измерения — ВСЕГДА «шт.» (требование ТК).
+    """
+
+    _DATA_SEARCH_MAX_ROW: int = 30
+
+    # Колонки по структуре шаблона (1-based)
+    _COL_NUM   = 2   # B — №
+    _COL_TITLE = 3   # C — Наименование товара
+    _COL_QTY   = 4   # D — Кол-во единиц
+    _COL_UNIT  = 5   # E — Единица измерения (всегда «шт.»)
+    _COL_PRICE = 6   # F — Общая стоимость в бел. рублях
+
+    def __init__(
+        self,
+        *,
+        template_path: Optional[str] = None,
+        yuan_to_rub: Optional[Decimal] = None,
+    ) -> None:
+        """
+        :param template_path: путь к шаблону ТК Экспедиция;
+                              env EXPEDITION_XLSX_TEMPLATE или media/excel/expedition.xlsx
+        :param yuan_to_rub:   курс CNY→BYN; env YUAN_TO_RUB или 15
+        """
+        self.template_path = (
+            template_path
+            or os.getenv("EXPEDITION_XLSX_TEMPLATE")
+            or os.path.join("media", "excel", "expedition.xlsx")
+        )
+        env_rate = os.getenv("YUAN_TO_RUB") or "15"
+        self.yuan_to_rub = (
+            Decimal(str(yuan_to_rub))
+            if yuan_to_rub is not None
+            else Decimal(env_rate)
+        )
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _select_sheet_name(items_count: int) -> str:
+        """
+        Возвращает имя листа по количеству товаров.
+        0 товаров → «1-31» (минимальный лист).
+        > 185 → «135-185» (максимальный лист).
+        """
+        for lo, hi, name in _EXPEDITION_SHEET_RANGES:
+            if lo <= items_count <= hi:
+                return name
+        if items_count == 0:
+            return _EXPEDITION_SHEET_RANGES[0][2]   # «1-31»
+        return _EXPEDITION_SHEET_RANGES[-1][2]       # «135-185»
+
+    @staticmethod
+    def _find_data_start_row(ws, max_search: int = 30) -> int:
+        """
+        Ищет первую строку, где в колонке B(2) стоит число 1 —
+        это начало таблицы данных.
+        Если не найдено — возвращает max_search + 1 как fallback.
+        """
+        col = ExcelExpeditionExportService._COL_NUM
+        for r in range(1, max_search + 1):
+            val = ws.cell(row=r, column=col).value
+            if val == 1 or val == "1":
+                return r
+        return max_search + 1
+
+    @staticmethod
+    async def _safe_write(ws, row: int, col: int, value) -> None:
+        """Пишет значение, обходя MergedCell."""
+        cell = ws.cell(row=row, column=col)
+        if type(cell).__name__ == "MergedCell":
+            for merged in ws.merged_cells.ranges:
+                if cell.coordinate in merged:
+                    ws.cell(row=merged.min_row, column=merged.min_col).value = value
+                    return
+        else:
+            cell.value = value
+
+    async def _load_items(self, cargo_service, cargo_id: int) -> List[dict]:
+        """Загружает товары из БД и формирует строки для Excel."""
+        items = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
+        result: List[dict] = []
+        for it in items:
+            title     = it.get("title") or "Без названия"
+            qty       = int(it.get("quantity") or 1)
+            cny       = Decimal(str(it.get("price") or 0))
+            total_byn = (cny * self.yuan_to_rub * qty).quantize(Decimal("0.01"))
+            result.append({
+                "title":     title,
+                "qty":       qty,
+                "unit":      "шт.",       # ВСЕГДА «шт.» — требование ТК Экспедиция
+                "total_byn": total_byn,
+            })
+        return result
+
+    # ------------------------------------------------------------------
+    # публичный метод
+    # ------------------------------------------------------------------
+
+    async def generate(
+        self,
+        *,
+        cargo_service,
+        cargo_id: int,
+    ) -> str:
+        """
+        Заполняет шаблон ТК Экспедиция и возвращает путь к временному xlsx.
+
+        :param cargo_service: CargoService
+        :param cargo_id:      ID посылки
+        :return:              /tmp/expedition_<cargo_id>_<YYYYMMDD>.xlsx
+        """
+        if not os.path.exists(self.template_path):
+            raise FileNotFoundError(
+                f"Excel-шаблон ТК Экспедиция не найден: {self.template_path}\n"
+                f"Положите файл по пути: {self.template_path}"
+            )
+
+        items = await self._load_items(cargo_service, cargo_id)
+        count = len(items)
+        sheet_name = self._select_sheet_name(count)
+
+        wb = load_workbook(self.template_path)
+
+        if sheet_name not in wb.sheetnames:
+            available = ", ".join(f"'{s}'" for s in wb.sheetnames)
+            wb.close()
+            raise RuntimeError(
+                f"Лист '{sheet_name}' не найден в шаблоне. "
+                f"Доступные листы: {available}"
+            )
+
+        ws = wb[sheet_name]
+        data_start = self._find_data_start_row(ws, self._DATA_SEARCH_MAX_ROW)
+
+        for idx, it in enumerate(items):
+            row = data_start + idx
+            await self._safe_write(ws, row, self._COL_NUM,   idx + 1)
+            await self._safe_write(ws, row, self._COL_TITLE, it["title"])
+            await self._safe_write(ws, row, self._COL_QTY,   it["qty"])
+            await self._safe_write(ws, row, self._COL_UNIT,  it["unit"])   # «шт.»
+            await self._safe_write(ws, row, self._COL_PRICE, float(it["total_byn"]))
+
+        today = datetime.now().strftime("%Y%m%d")
+        tmpdir = tempfile.gettempdir()
+        out_path = os.path.join(
+            tmpdir, f"expedition_{cargo_id}_{today}.xlsx"
+        )
+        wb.save(out_path)
+        wb.close()
+        return out_path
+
 
 # ============================================================
-# 3) УДОБНЫЕ ФАСАДЫ
+# 4) ФАСАДЫ
 # ============================================================
 
-async def export_cn_msk_goods(*, bot: Bot, cargo_service, cargo_id: int,
-                              template_path: Optional[str] = None,
-                              max_concurrency: int = 8,
-                              photo_inner_padding_px: int = 6) -> str:
-    """
-    Фасад для CN→MSK (с фото). Возвращает путь к временному .xlsx.
-    """
+async def export_cn_msk_goods(
+    *,
+    bot: Bot,
+    cargo_service,
+    cargo_id: int,
+    template_path: Optional[str] = None,
+    max_concurrency: int = 8,
+    photo_inner_padding_px: int = 6,
+) -> str:
+    """Фасад для CN→MSK (с фото)."""
     svc = ExcelExportService(
         bot=bot,
         template_path=template_path,
         max_concurrency=max_concurrency,
         photo_inner_padding_px=photo_inner_padding_px,
     )
-    return await svc.generate_goods_sheet(cargo_service=cargo_service, cargo_id=cargo_id)
+    return await svc.generate_goods_sheet(
+        cargo_service=cargo_service, cargo_id=cargo_id
+    )
 
 
-async def export_text_form(*, cargo_service, cargo_id: int,
-                           template_path: Optional[str] = None,
-                           sheet_name: Optional[str] = None,
-                           start_row: int = 5,
-                           end_row: int = 33,
-                           total_label: str = "Всего",
-                           yuan_to_rub: Optional[Decimal] = None) -> str:
-    """
-    Фасад для текстового бланка (без фото). Возвращает путь к временному .xlsx.
-    """
+async def export_text_form(
+    *,
+    cargo_service,
+    cargo_id: int,
+    template_path: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    start_row: int = 5,
+    end_row: int = 33,
+    total_label: str = "Всего",
+    yuan_to_rub: Optional[Decimal] = None,
+) -> str:
+    """Фасад для текстового бланка Садовод (без фото)."""
     svc = ExcelTextFormExportService(
         template_path=template_path,
         sheet_name=sheet_name,
@@ -607,4 +720,23 @@ async def export_text_form(*, cargo_service, cargo_id: int,
         total_label=total_label,
         yuan_to_rub=yuan_to_rub,
     )
-    return await svc.generate_text_form(cargo_service=cargo_service, cargo_id=cargo_id)
+    return await svc.generate_text_form(
+        cargo_service=cargo_service, cargo_id=cargo_id
+    )
+
+
+async def export_expedition(
+    *,
+    cargo_service,
+    cargo_id: int,
+    template_path: Optional[str] = None,
+    yuan_to_rub: Optional[Decimal] = None,
+) -> str:
+    """Фасад для ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву товаров)."""
+    svc = ExcelExpeditionExportService(
+        template_path=template_path,
+        yuan_to_rub=yuan_to_rub,
+    )
+    return await svc.generate(
+        cargo_service=cargo_service, cargo_id=cargo_id
+    )

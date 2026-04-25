@@ -4,7 +4,8 @@ from aiogram.fsm.context import FSMContext
 
 import config
 from keyboards import AdminFlowCallback, AdminKB, PaymentFlowCallback
-from .fsm import PaymentForm  # если FSM лежит рядом с админом; иначе поправь импорт
+from .fsm import PaymentForm
+from app.utils import safe_delete
 
 
 class AdminPayments:
@@ -38,7 +39,7 @@ class AdminPayments:
 
 
     async def add_payment(self, call: types.CallbackQuery, callback_data: AdminFlowCallback, state: FSMContext):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         data = await state.get_data()
         cargo_id = getattr(callback_data, "id", None) or data.get("cargo_id")
@@ -58,15 +59,18 @@ class AdminPayments:
         await call.message.answer(text=text, reply_markup=kb)
 
 
-    async def payment_pick_kind(self, call: types.CallbackQuery, callback_data: AdminFlowCallback, state: FSMContext):
+    async def payment_pick_kind(
+        self,
+        call: types.CallbackQuery,
+        callback_data: AdminFlowCallback,
+        state: FSMContext,
+    ):
         """
-        Сохранение причины пополнения баланса
-
-        Вывод сообщения о выборе сумммы
+        Сохранение причины пополнения баланса.
+        Вывод сообщения о выборе суммы.
         """
-        
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         data = await state.get_data()
         kind = getattr(callback_data, "status", None) or data.get("kind")
@@ -79,39 +83,39 @@ class AdminPayments:
             f"<blockquote>🧮 Выберите сумму или введите свою:</blockquote>"
         )
         kb = AdminKB.payment_amount()
-
         await call.message.answer(text=text, reply_markup=kb)
 
 
     async def payment_pick_custom_amount(self, message: types.Message, state: FSMContext):
         """
-        Сохранение суммы
+        Сохранение суммы (ручной ввод).
+        Удаляем предыдущее сообщение бота и сообщение пользователя безопасно.
         """
-        
-        msg_id = message.message_id -1
+        msg_id = message.message_id - 1
         chat_id = message.from_user.id
-        await config.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        # await message.delete()
-
-        await state.set_state(PaymentForm.note)
+        try:
+            await config.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
 
         data = await state.get_data()
         kind = data.get("kind")
 
         try:
             amount = float(message.text.replace(',', '.'))
-
-        except:
+        except Exception:
             text = "<blockquote>Введите число:</blockquote>"
-            # kb = AdminKB.payment_back()
             await message.reply(text=text)
-
             await state.set_state(PaymentForm.amount)
             return
 
         await state.update_data(amount=amount, currency="USD")
-        await message.delete()
+        await state.set_state(PaymentForm.note)
 
+        try:
+            await message.delete()
+        except Exception:
+            pass
 
         text = (
             f"🏷 Тип: <code>{kind}</code>\n"
@@ -122,13 +126,15 @@ class AdminPayments:
         await message.answer(text=text, reply_markup=kb)
 
 
-    async def payment_pick_amount(self, call: types.CallbackQuery, callback_data: PaymentFlowCallback, state: FSMContext):
-        """
-        Выбор суммы платежа по кнопкам
-        """
-
+    async def payment_pick_amount(
+        self,
+        call: types.CallbackQuery,
+        callback_data: PaymentFlowCallback,
+        state: FSMContext,
+    ):
+        """Выбор суммы платежа по кнопкам."""
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         await state.set_state(PaymentForm.note)
 
@@ -147,13 +153,15 @@ class AdminPayments:
         await call.message.answer(text=text, reply_markup=kb)
 
 
-    async def payment_save(self, call: types.CallbackQuery, callback_data: AdminFlowCallback, state: FSMContext):
-        """
-        Финальное действие, сохрание платежа
-        """
-
+    async def payment_save(
+        self,
+        call: types.CallbackQuery,
+        callback_data: AdminFlowCallback,
+        state: FSMContext,
+    ):
+        """Финальное действие — сохранение платежа."""
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         data = await state.get_data()
         cargo_id = data["cargo_id"]
@@ -176,9 +184,14 @@ class AdminPayments:
         await call.message.answer(text=text, reply_markup=kb)
 
 
-    async def payment_add_note(self, call: types.CallbackQuery, callback_data: AdminFlowCallback, state: FSMContext):
+    async def payment_add_note(
+        self,
+        call: types.CallbackQuery,
+        callback_data: AdminFlowCallback,
+        state: FSMContext,
+    ):
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         await state.set_state(PaymentForm.note)
 
@@ -203,11 +216,6 @@ class AdminPayments:
         amount = Decimal(str(data["amount"]))
         currency = str(data.get("currency", "USD"))
 
-        # # удаляем сообщение пользователя с комментом (по желанию)
-        # with contextlib.suppress(Exception):
-        #     await message.delete()
-
-        # пишем платёж с комментарием
         await self.pay.add(
             cargo_id=cargo_id,
             user_id=user_id,
@@ -230,9 +238,13 @@ class AdminPayments:
         await message.answer(text=text, reply_markup=kb)
 
 
-
-    async def payment_cancel(self, call: types.CallbackQuery, callback_data: AdminFlowCallback, state: FSMContext):
-        await call.message.delete()
+    async def payment_cancel(
+        self,
+        call: types.CallbackQuery,
+        callback_data: AdminFlowCallback,
+        state: FSMContext,
+    ):
+        await safe_delete(call.message)
         await state.clear()
 
         text = "🚫 Операция добавления платежа отменена."
