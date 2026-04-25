@@ -8,12 +8,16 @@ from aiogram import types, Router, F
 from keyboards import AdminFlowCallback
 from database import CargoService
 from app.handlers.services.pdf_export import PDFExportService
-from app.handlers.services.shipment_exporter import export_cn_msk_goods, export_text_form
+from app.handlers.services.shipment_exporter import (
+    export_cn_msk_goods,
+    export_text_form,
+    export_expedition,
+)
 
 
 class AdminExports:
     """
-    Экспорт PDF из админки.
+    Экспорт документов (PDF / Excel) из панели администратора.
     """
 
     def __init__(self, *, router: Router, cargo: CargoService):
@@ -28,8 +32,6 @@ class AdminExports:
             self.export_items_pdf,
             AdminFlowCallback.filter(F.action == "export_items_pdf")
         )
-
-        # 🔹 Новые Excel-экспорты
         self.router.callback_query.register(
             self.export_excel_352,
             AdminFlowCallback.filter(F.action == "export_excel_352")
@@ -38,9 +40,18 @@ class AdminExports:
             self.export_excel_sadovod,
             AdminFlowCallback.filter(F.action == "export_excel_sadovod")
         )
+        self.router.callback_query.register(
+            self.export_excel_expedition,
+            AdminFlowCallback.filter(F.action == "export_excel_expedition")
+        )
 
+    # ------------------------------------------------------------------
+    # PDF
+    # ------------------------------------------------------------------
 
-    async def export_admin_pdf(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
+    async def export_admin_pdf(
+        self, call: types.CallbackQuery, callback_data: AdminFlowCallback
+    ) -> None:
         cargo_id = callback_data.id
         settle = await self.cargo.settlement_by_cargo(cargo_id=cargo_id)
 
@@ -56,11 +67,13 @@ class AdminExports:
         )
 
         file = types.FSInputFile(file_path)
-        text = "📄 Админ-отчёт по посылке"
-        await call.message.answer_document(document=file, caption=text)
+        await call.message.answer_document(
+            document=file, caption="📄 Админ-отчёт по посылке"
+        )
 
-
-    async def export_items_pdf(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
+    async def export_items_pdf(
+        self, call: types.CallbackQuery, callback_data: AdminFlowCallback
+    ) -> None:
         cargo_id = callback_data.id
 
         payload = await self.cargo.get_admin_items_export_payload(cargo_id=cargo_id)
@@ -85,34 +98,18 @@ class AdminExports:
         )
 
         file = types.FSInputFile(file_path)
-        text = "🧾 Экспорт всех товаров"
-        await call.message.answer_document(document=file, caption=text)
+        await call.message.answer_document(
+            document=file, caption="🧾 Экспорт всех товаров"
+        )
 
+    # ------------------------------------------------------------------
+    # Excel
+    # ------------------------------------------------------------------
 
-    async def _collect_item_photos(self, *, bot, items: list[dict]) -> Dict[int, bytes]:
-        """
-        Возвращает {item_id: image_bytes} для тех, где есть photo_file_id.
-        """
-        result: Dict[int, bytes] = {}
-        for it in items:
-            file_id = it.get("photo_file_id")
-            if not file_id:
-                continue
-            try:
-                file = await bot.get_file(file_id)  # aiogram 3.x
-                buf = BytesIO()
-                await bot.download_file(file.file_path, buf)
-                result[it["id"]] = buf.getvalue()
-            except Exception:
-                # пропускаем, если файл не доступен
-                pass
-        return result
-    
-
-    async def export_excel_352(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        """
-        Excel 352 — CN→MSK, лист «Товары» с фото.
-        """
+    async def export_excel_352(
+        self, call: types.CallbackQuery, callback_data: AdminFlowCallback
+    ) -> None:
+        """Excel 352 — CN→MSK, лист «Товары» с фото."""
         cargo_id = callback_data.id
 
         try:
@@ -129,13 +126,15 @@ class AdminExports:
             return
 
         file = types.FSInputFile(file_path)
-        caption = f"📊 Excel 352 по посылке #{cargo_id}"
-        await call.message.answer_document(document=file, caption=caption)
+        await call.message.answer_document(
+            document=file,
+            caption=f"📊 Excel 352 по посылке #{cargo_id}",
+        )
 
-    async def export_excel_sadovod(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        """
-        Excel Садовод — текстовый бланк без фото.
-        """
+    async def export_excel_sadovod(
+        self, call: types.CallbackQuery, callback_data: AdminFlowCallback
+    ) -> None:
+        """Excel Садовод — текстовый бланк без фото."""
         cargo_id = callback_data.id
 
         try:
@@ -151,5 +150,74 @@ class AdminExports:
             return
 
         file = types.FSInputFile(file_path)
-        caption = f"📊 Excel Садовод по посылке #{cargo_id}"
-        await call.message.answer_document(document=file, caption=caption)
+        await call.message.answer_document(
+            document=file,
+            caption=f"📊 Excel Садовод по посылке #{cargo_id}",
+        )
+
+    async def export_excel_expedition(
+        self, call: types.CallbackQuery, callback_data: AdminFlowCallback
+    ) -> None:
+        """
+        Excel ТК Экспедиция.
+
+        Бот считает количество товаров и автоматически выбирает
+        нужный лист шаблона:
+          1–31   → лист «1-31»
+          32–83  → лист «32-83»
+          84–134 → лист «84-134»
+          135–185 → лист «135-185»
+
+        Единица измерения — всегда «шт.»
+        """
+        cargo_id = callback_data.id
+
+        try:
+            file_path = await export_expedition(
+                cargo_service=self.cargo,
+                cargo_id=cargo_id,
+            )
+        except FileNotFoundError:
+            await call.answer(
+                "❌ Шаблон ТК Экспедиция не найден.\n"
+                "Положите файл в media/excel/expedition.xlsx",
+                show_alert=True,
+            )
+            return
+        except RuntimeError as exc:
+            await call.answer(f"⚠️ {exc}", show_alert=True)
+            return
+        except Exception:
+            await call.answer(
+                "⚠️ Не удалось сформировать Excel ТК Экспедиция",
+                show_alert=True,
+            )
+            return
+
+        file = types.FSInputFile(file_path)
+        await call.message.answer_document(
+            document=file,
+            caption=f"🚛 ТК Экспедиция — посылка #{cargo_id}",
+        )
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    async def _collect_item_photos(
+        self, *, bot, items: list[dict]
+    ) -> Dict[int, bytes]:
+        """Возвращает {item_id: image_bytes} для тех, где есть photo_file_id."""
+        result: Dict[int, bytes] = {}
+        for it in items:
+            file_id = it.get("photo_file_id")
+            if not file_id:
+                continue
+            try:
+                file = await bot.get_file(file_id)
+                buf = BytesIO()
+                await bot.download_file(file.file_path, buf)
+                result[it["id"]] = buf.getvalue()
+            except Exception:
+                pass
+        return result
