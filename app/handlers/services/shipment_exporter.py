@@ -482,22 +482,23 @@ class ExcelTextFormExportService:
 # ============================================================
 #
 # Структура шаблона (файл ТК_Экспедиция_Южные ворота.xlsx):
-#   Лист «Образец»  — пример заполнения (не трогаем)
-#   Лист «1-31»     — 1-31  товаров
-#   Лист «32-83»    — 32-83 товара
-#   Лист «84-134»   — 84-134 товара
-#   Лист «135-185»  — 135-185 товаров
+#   Лист «Образец»   — пример заполнения (не трогаем)
+#   Лист «1-31»      — 1–31  товаров
+#   Лист «32-83»     — 32–83  товара
+#   Лист «84-134»    — 84–134 товара
+#   Лист «135-185»   — 135–185 товаров
 #
 # Колонки в каждом рабочем листе (по образцу):
 #   A(1) — пустая / структурная
 #   B(2) — №  (порядковый номер)
 #   C(3) — Наименование товара (точное название)
-#   D(4) — Кол-во единиц
-#   E(5) — Единица измерения  → ВСЕГДА «шт.»
-#   F(6) — Общая стоимость в бел. рублях
+#   D(4) — Кол-во единиц                     → всегда «шт.» (штук)
+#   E(5) — Единица измерения                 → ВСЕГДА «шт.»
+#   F(6) — Общая стоимость в бел. рублях (BYN)
 #
-# Строка «Итоговая стоимость» определяется автоматически по
-# наличию этой строки в колонке B или C.
+# Цена: item.price хранится в USD.
+# Конвертация: total_byn = price_usd * usd_to_byn * qty
+# Курс по умолчанию: 1 USD = 2.9 BYN (env USD_TO_BYN)
 
 _EXPEDITION_SHEET_RANGES: List[Tuple[int, int, str]] = [
     (1,   31,  "1-31"),
@@ -520,8 +521,9 @@ class ExcelExpeditionExportService:
            135–185 → «135-185»
       3. Находим первую строку данных (ищем «1» в колонке B).
       4. Заполняем строки:
-           B = №, C = Наименование, D = Кол-во, E = «шт.», F = Стоимость (BYN)
+           B = №, C = Наименование, D = Кол-во (шт.), E = «шт.», F = Стоимость (BYN)
       5. Единица измерения — ВСЕГДА «шт.» (требование ТК).
+      6. Стоимость: price_usd * usd_to_byn * qty  (курс 1 USD = 2.9 BYN по умолчанию).
     """
 
     _DATA_SEARCH_MAX_ROW: int = 30
@@ -531,28 +533,28 @@ class ExcelExpeditionExportService:
     _COL_TITLE = 3   # C — Наименование товара
     _COL_QTY   = 4   # D — Кол-во единиц
     _COL_UNIT  = 5   # E — Единица измерения (всегда «шт.»)
-    _COL_PRICE = 6   # F — Общая стоимость в бел. рублях
+    _COL_PRICE = 6   # F — Общая стоимость в бел. рублях (BYN)
 
     def __init__(
         self,
         *,
         template_path: Optional[str] = None,
-        yuan_to_rub: Optional[Decimal] = None,
+        usd_to_byn: Optional[Decimal] = None,
     ) -> None:
         """
         :param template_path: путь к шаблону ТК Экспедиция;
                               env EXPEDITION_XLSX_TEMPLATE или media/excel/expedition.xlsx
-        :param yuan_to_rub:   курс CNY→BYN; env YUAN_TO_RUB или 15
+        :param usd_to_byn:    курс USD→BYN; env USD_TO_BYN или 2.9 по умолчанию
         """
         self.template_path = (
             template_path
             or os.getenv("EXPEDITION_XLSX_TEMPLATE")
             or os.path.join("media", "excel", "expedition.xlsx")
         )
-        env_rate = os.getenv("YUAN_TO_RUB") or "15"
-        self.yuan_to_rub = (
-            Decimal(str(yuan_to_rub))
-            if yuan_to_rub is not None
+        env_rate = os.getenv("USD_TO_BYN") or "2.9"
+        self.usd_to_byn = (
+            Decimal(str(usd_to_byn))
+            if usd_to_byn is not None
             else Decimal(env_rate)
         )
 
@@ -601,14 +603,18 @@ class ExcelExpeditionExportService:
             cell.value = value
 
     async def _load_items(self, cargo_service, cargo_id: int) -> List[dict]:
-        """Загружает товары из БД и формирует строки для Excel."""
+        """Загружает товары из БД и формирует строки для Excel.
+
+        price хранится в USD → конвертируем в BYN по курсу self.usd_to_byn.
+        total_byn = price_usd * usd_to_byn * qty
+        """
         items = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
         result: List[dict] = []
         for it in items:
-            title     = it.get("title") or "Без названия"
-            qty       = int(it.get("quantity") or 1)
-            cny       = Decimal(str(it.get("price") or 0))
-            total_byn = (cny * self.yuan_to_rub * qty).quantize(Decimal("0.01"))
+            title      = it.get("title") or "Без названия"
+            qty        = int(it.get("quantity") or 1)
+            price_usd  = Decimal(str(it.get("price") or 0))
+            total_byn  = (price_usd * self.usd_to_byn * qty).quantize(Decimal("0.01"))
             result.append({
                 "title":     title,
                 "qty":       qty,
@@ -730,12 +736,16 @@ async def export_expedition(
     cargo_service,
     cargo_id: int,
     template_path: Optional[str] = None,
-    yuan_to_rub: Optional[Decimal] = None,
+    usd_to_byn: Optional[Decimal] = None,
 ) -> str:
-    """Фасад для ТК Экспедиция — Южные ворота (авто-выбор листа по кол-ву товаров)."""
+    """Фасад для ТК Экспедиция — Южные ворота.
+
+    Авто-выбор листа по кол-ву товаров.
+    Цена в BYN: price_usd * usd_to_byn * qty (курс 1 USD = 2.9 BYN по умолчанию).
+    """
     svc = ExcelExpeditionExportService(
         template_path=template_path,
-        yuan_to_rub=yuan_to_rub,
+        usd_to_byn=usd_to_byn,
     )
     return await svc.generate(
         cargo_service=cargo_service, cargo_id=cargo_id

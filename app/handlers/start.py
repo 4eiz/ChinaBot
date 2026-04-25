@@ -58,7 +58,7 @@ class StartHandler:
 
     async def start_info(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()
-        await safe_delete(call)
+        await safe_delete(call.message)
 
         text = (
             "ℹ️ <b>Полезная информация</b>\n\n"
@@ -79,7 +79,7 @@ class StartHandler:
 
     async def start_support(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()
-        await safe_delete(call)
+        await safe_delete(call.message)
 
         text = (
             "🆘 <b>Поддержка</b>\n\n"
@@ -98,7 +98,7 @@ class StartHandler:
 
     async def start_home(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()
-        await safe_delete(call)
+        await safe_delete(call.message)
 
         user = await self.users.get_user(user_id=call.from_user.id)
         is_admin = bool(user and user.get("is_admin"))

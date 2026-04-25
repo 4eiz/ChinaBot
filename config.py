@@ -66,11 +66,11 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@example.com")
 SUPPORT_HOURS = os.getenv("SUPPORT_HOURS", "Пн–Пт 10:00–19:00 (Мск)")
 
 
-
-
 CLEAR_RATE = Decimal(os.getenv('CLEAR_RATE', '0') or '0')
 DEFAULT_RATE = Decimal(os.getenv('DEFAULT_RATE', '0.1898') or '0.1898')
 
+# Курс USD → BYN для экспорта ТК Экспедиция (1 USD = 2.9 BYN по умолчанию)
+USD_TO_BYN = Decimal(os.getenv('USD_TO_BYN', '2.9') or '2.9')
 
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))

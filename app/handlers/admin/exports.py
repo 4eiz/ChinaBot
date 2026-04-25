@@ -159,7 +159,7 @@ class AdminExports:
         self, call: types.CallbackQuery, callback_data: AdminFlowCallback
     ) -> None:
         """
-        Excel ТК Экспедиция.
+        Excel ТК Экспедиция — Южные ворота.
 
         Бот считает количество товаров и автоматически выбирает
         нужный лист шаблона:
@@ -169,6 +169,7 @@ class AdminExports:
           135–185 → лист «135-185»
 
         Единица измерения — всегда «шт.»
+        Стоимость: price_usd × usd_to_byn × qty  (1 USD = 2.9 BYN по умолчанию)
         """
         cargo_id = callback_data.id
 
