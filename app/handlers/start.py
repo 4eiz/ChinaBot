@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart
 
-from database import UsersDB, RequestsDB
+from database import UsersDB, RequestsDB, CargoService
 from app.handlers.form.fsm import FormState
 from app.handlers import FormClientHandler
 from app.utils import safe_delete
@@ -16,16 +16,33 @@ from media import PhotoBank
 class StartHandler:
     def __init__(self):
         self.users = UsersDB(config.CONNECTION_DATABASE)
+        self.cargo_service = CargoService(conn=config.CONNECTION_DATABASE)
         self.router = Router()
         self.router.message.register(self.start, CommandStart())
         self.router.callback_query.register(self.start_info,    MenuCallback.filter(F.action == "start_info"))
         self.router.callback_query.register(self.start_support, MenuCallback.filter(F.action == "start_support"))
         self.router.callback_query.register(self.start_home,    MenuCallback.filter(F.action == "start_home"))
 
+    @staticmethod
+    def _referrer_from_start(text: str | None) -> int | None:
+        if not text or " " not in text:
+            return None
+        payload = text.split(maxsplit=1)[1].strip()
+        for prefix in ("ref_", "ref-", "ref"):
+            if payload.startswith(prefix):
+                payload = payload[len(prefix):]
+                break
+        try:
+            referrer_id = int(payload)
+        except (TypeError, ValueError):
+            return None
+        return referrer_id if referrer_id > 0 else None
+
     async def start(self, message: Message, state: FSMContext):
         await safe_delete(message)
 
         user_id = message.from_user.id
+        referrer_id = self._referrer_from_start(message.text)
         user = await self.users.get_user(user_id=user_id)
         is_admin = bool(user and user.get("is_admin"))
 
@@ -42,10 +59,25 @@ class StartHandler:
                 return
 
             await state.set_state(FormState.name)
+            if referrer_id and referrer_id != user_id:
+                await state.update_data(referrer_id=referrer_id)
             form = FormClientHandler(conn=config.CONNECTION_DATABASE)
             photo = PhotoBank.get_file('SLIDE1')
             await message.answer_photo(photo=photo, caption=form.text_name)
             return
+
+        if referrer_id and referrer_id != user_id:
+            created = await self.users.create_referral_relationship(
+                referrer_id=referrer_id,
+                invited_id=user_id,
+                source="bot_link",
+                note="created from /start referral link",
+            )
+            if created:
+                try:
+                    await self.cargo_service.recalculate_referrals(user_id=user_id)
+                except Exception as exc:
+                    print(f"Failed to recalculate referrals for user {user_id}: {exc}")
 
         text = (
             f"👋 <b>Добро пожаловать в {config.SHOP_NAME}!</b>\n\n"

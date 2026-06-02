@@ -11,6 +11,7 @@ class ProfileKB:
     def main_menu(*, is_admin: bool = False) -> InlineKeyboardMarkup:
         b = InlineKeyboardBuilder()
         b.button(text="📦 Мои посылки", callback_data=ProfileFlowCallback(action="shipments").pack())
+        b.button(text="👥 Рефералы", callback_data=ProfileFlowCallback(action="referrals").pack())
         b.button(text="⬅ Назад", callback_data=MenuCallback(action="start_home").pack())
         b.adjust(1, 1, 1)
         return b.as_markup()

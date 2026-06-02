@@ -279,12 +279,18 @@ class PDFExportService:
         # ---- Краткая сводка по оплате ----
         total_goods_usd = settlement_row.get("goods_usd") or 0
         total_delivery_usd = (settlement_row.get("msk_usd") or 0) + (settlement_row.get("by_usd") or 0)
+        referral_discount_usd = settlement_row.get("referral_discount_usd") or 0
         total_due_usd = settlement_row.get("total_due_usd") or 0
+        referral_line = (
+            f"Реферальная скидка: <b>-{referral_discount_usd:.2f}$</b><br/>"
+            if referral_discount_usd > 0 else ""
+        )
 
         summary_text = (
             f"💰 <b>Сводка по оплате</b><br/>"
             f"Товары: <b>{total_goods_usd:.2f}$</b><br/>"
             f"Доставка: <b>{total_delivery_usd:.2f}$</b><br/>"
+            f"{referral_line}"
             f"Итого к оплате: <b>{total_due_usd:.2f}$</b>"
         )
         elements.append(Paragraph(summary_text, self.styles["iOSCJK"]))

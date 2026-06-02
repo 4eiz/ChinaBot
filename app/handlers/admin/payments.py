@@ -171,6 +171,10 @@ class AdminPayments:
         currency = data.get("currency", "USD")
 
         await self.pay.add(cargo_id=cargo_id, user_id=user_id, kind=kind, amount_usd=amount, note=None)
+        try:
+            await self.cargo.recalculate_referrals(cargo_id=int(cargo_id), user_id=int(user_id))
+        except Exception as exc:
+            print(f"Failed to recalculate referrals for cargo {cargo_id}, user {user_id}: {exc}")
         await state.clear()
 
         text = (
@@ -223,6 +227,10 @@ class AdminPayments:
             amount_usd=amount,
             note=note_text,
         )
+        try:
+            await self.cargo.recalculate_referrals(cargo_id=int(cargo_id), user_id=int(user_id))
+        except Exception as exc:
+            print(f"Failed to recalculate referrals for cargo {cargo_id}, user {user_id}: {exc}")
 
         await state.clear()
 

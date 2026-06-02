@@ -283,6 +283,12 @@ class AdminShipments:
             msk_line = line_for("🚚 CN→MSK", float(row["msk_usd"]),float(row["msk_paid_usd"]))
             by_line = line_for("🚛 MSK→BY", float(row["by_usd"]), float(row["by_paid_usd"]))
 
+            referral_discount = float(row.get("referral_discount_usd", 0) or 0)
+            finance_lines = [goods_line, msk_line, by_line]
+            if referral_discount > 0:
+                finance_lines.append(f"👥 Реф. скидка: <code>-{referral_discount:.2f}$</code>")
+            finance_text = "\n".join(finance_lines)
+
             adv = float(row["advance_usd"])
             total_due  = float(row["total_due_usd"])
             total_over = float(row.get("total_overpay_usd", 0.0))
@@ -300,7 +306,7 @@ class AdminShipments:
             lines.append(
                 f"👤 <b>{uid}</b> — {fio}\n"
                 f"📱 <code>{phone}</code>\n"
-                f"{goods_line}\n{msk_line}\n{by_line}\n{summary}"
+                f"{finance_text}\n{summary}"
             )
 
         text = "👥 <b>Сводка по людям</b>\n\n" + ("\n\n".join(lines) if lines else "Пусто")
