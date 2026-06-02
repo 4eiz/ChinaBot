@@ -2,13 +2,14 @@ import os
 import asyncpg
 import json
 from decimal import Decimal
+from pathlib import Path
 from aiogram import Bot
 from aiogram.client.bot import DefaultBotProperties
 from dotenv import load_dotenv
 
 
-
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / '.env')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BOT_USERNAME = os.getenv('BOT_USERNAME', '')
 SHOP_NAME = os.getenv('SHOP_NAME')
@@ -56,6 +57,10 @@ ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 API_URL = os.getenv('API_URL')
 API_USERNAME = os.getenv('API_USERNAME')
 API_PASSWORD = os.getenv('API_PASSWORD')
+SITE_API_URL = os.getenv('SITE_API_URL', 'http://127.0.0.1:8000')
+SITE_BOT_TOKEN = os.getenv('SITE_BOT_TOKEN') or BOT_TOKEN
+SITE_OUTBOX_ENABLED = os.getenv('SITE_OUTBOX_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+SITE_OUTBOX_POLL_SECONDS = int(os.getenv('SITE_OUTBOX_POLL_SECONDS', '10') or '10')
 
 
 # ССЫЛКИ

@@ -2,6 +2,8 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import aiohttp
 
 from database import UsersDB, RequestsDB, CargoService
 from app.handlers.form.fsm import FormState
@@ -19,6 +21,8 @@ class StartHandler:
         self.cargo_service = CargoService(conn=config.CONNECTION_DATABASE)
         self.router = Router()
         self.router.message.register(self.start, CommandStart())
+        self.router.callback_query.register(self.confirm_site_login, F.data.startswith("site_login_confirm:"))
+        self.router.callback_query.register(self.cancel_site_login, F.data.startswith("site_login_cancel:"))
         self.router.callback_query.register(self.start_info,    MenuCallback.filter(F.action == "start_info"))
         self.router.callback_query.register(self.start_support, MenuCallback.filter(F.action == "start_support"))
         self.router.callback_query.register(self.start_home,    MenuCallback.filter(F.action == "start_home"))
@@ -38,8 +42,60 @@ class StartHandler:
             return None
         return referrer_id if referrer_id > 0 else None
 
+    @staticmethod
+    def _login_token_from_start(text: str | None) -> str | None:
+        if not text or " " not in text:
+            return None
+        payload = text.split(maxsplit=1)[1].strip()
+        for prefix in ("login_", "login-"):
+            if payload.startswith(prefix):
+                token = payload[len(prefix):].strip()
+                return token or None
+        return None
+
+    @staticmethod
+    def _site_login_keyboard(token: str):
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Подтвердить вход", callback_data=f"site_login_confirm:{token}")
+        builder.button(text="❌ Отмена", callback_data=f"site_login_cancel:{token}")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    async def _approve_site_login(self, token: str, user):
+        site_api_url = (config.SITE_API_URL or "").rstrip("/")
+        if not site_api_url:
+            raise RuntimeError("SITE_API_URL is not configured")
+
+        payload = {
+            "token": token,
+            "telegram_id": user.id,
+            "name": user.first_name or "",
+            "surname": user.last_name or "",
+        }
+        headers = {"X-Telegram-Bot-Token": config.SITE_BOT_TOKEN or ""}
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{site_api_url}/api/profile/auth/telegram/approve/",
+                json=payload,
+                headers=headers,
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise RuntimeError(f"Site login approve failed: {resp.status} {text}")
+                return await resp.json()
+
     async def start(self, message: Message, state: FSMContext):
         await safe_delete(message)
+
+        login_token = self._login_token_from_start(message.text)
+        if login_token:
+            await message.answer(
+                "🔐 <b>Вход в личный кабинет</b>\n\n"
+                "Нажмите кнопку ниже, чтобы подтвердить вход на сайте.",
+                reply_markup=self._site_login_keyboard(login_token),
+            )
+            return
 
         user_id = message.from_user.id
         referrer_id = self._referrer_from_start(message.text)
@@ -87,6 +143,28 @@ class StartHandler:
         kb = StartKB.main(is_admin=is_admin)
         photo = PhotoBank.get_file('MENU_IMAGE')
         await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+
+    async def confirm_site_login(self, call: CallbackQuery):
+        await call.answer()
+        token = (call.data or "").split(":", maxsplit=1)[1]
+        try:
+            await self._approve_site_login(token, call.from_user)
+        except Exception as exc:
+            print(f"Failed to approve site login for {call.from_user.id}: {exc}")
+            await call.answer("Не удалось подтвердить вход", show_alert=True)
+            await call.message.edit_text(
+                "Не удалось подтвердить вход. Вернитесь на сайт и попробуйте начать вход заново."
+            )
+            return
+
+        await call.answer("Вход подтвержден")
+        await call.message.edit_text(
+            "✅ Вход подтвержден. Вернитесь на сайт, кабинет откроется автоматически."
+        )
+
+    async def cancel_site_login(self, call: CallbackQuery):
+        await call.answer("Вход отменен")
+        await call.message.edit_text("Вход отменен. На сайте можно начать новую попытку.")
 
     async def start_info(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()

@@ -4,6 +4,7 @@ import logging
 from aiogram import Dispatcher
 import config
 from app.routers import get_routers
+from app.handlers.services.site_outbox import SiteOutboxPoller
 from database import UsersDB, CargoService
 
 # Настройка логов
@@ -33,8 +34,22 @@ async def start():
     await config.bot.delete_webhook(drop_pending_updates=True)
     logger.info("📡 Удалили вебхук. Бот переходит в polling режим.")
 
+    outbox_poller = SiteOutboxPoller(
+        bot=config.bot,
+        site_api_url=config.SITE_API_URL,
+        bot_token=config.SITE_BOT_TOKEN,
+        admin_chat_id=config.ADMIN_CHAT_ID,
+        poll_seconds=config.SITE_OUTBOX_POLL_SECONDS,
+        enabled=config.SITE_OUTBOX_ENABLED,
+    )
+    outbox_task = asyncio.create_task(outbox_poller.run())
+
     logger.info("🤖 Бот запущен и ждёт события...")
-    await dp.start_polling(config.bot)
+    try:
+        await dp.start_polling(config.bot)
+    finally:
+        outbox_task.cancel()
+        await asyncio.gather(outbox_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
