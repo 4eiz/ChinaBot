@@ -94,6 +94,7 @@ class CargosDB:
         'route_status': "TEXT NOT NULL DEFAULT 'created'",    # created|to_moscow|in_moscow|to_brest|in_brest|delivered
         'title': "TEXT",
         'total_weight_kg': "NUMERIC(10,3) NOT NULL DEFAULT 0",
+        'box_weight_kg': "NUMERIC(10,3) NOT NULL DEFAULT 0",
         'items_count': "INT NOT NULL DEFAULT 0",
         'rate_cn_to_msk_usd': "NUMERIC(10,2)",        # тариф $/кг плечо 1
         'rate_msk_to_by_usd': "NUMERIC(10,2)",        # тариф $/кг плечо 2
@@ -166,7 +167,8 @@ class CargosDB:
             """
             SELECT COALESCE(SUM(weight_kg * quantity), 0) AS total_weight_kg,
                    COUNT(*) AS items_count
-            FROM items WHERE cargo_id=$1
+            FROM items
+            WHERE cargo_id=$1 AND is_out_of_stock = FALSE AND removed_at IS NULL
             """,
             cargo_id
         )
@@ -186,17 +188,19 @@ class CargosDB:
             raise ValueError("Груз не найден")
 
         total_weight = Decimal(str(cargo['total_weight_kg'] or 0))
+        box_weight = Decimal(str(cargo.get('box_weight_kg') or 0))
         if total_weight <= 0:
             await self.recalc_weight_and_count(cargo_id=cargo_id)
             cargo = await self.get(cargo_id=cargo_id)
             total_weight = Decimal(str(cargo['total_weight_kg'] or 0))
+            box_weight = Decimal(str(cargo.get('box_weight_kg') or 0))
 
         rows = await self.conn.fetch(
             """
             SELECT DISTINCT t.rate_per_kg_usd
             FROM items i
             JOIN cargo_types t ON t.id = i.item_type_id
-            WHERE i.cargo_id=$1
+            WHERE i.cargo_id=$1 AND i.is_out_of_stock = FALSE AND i.removed_at IS NULL
             """,
             cargo_id
         )
@@ -206,13 +210,16 @@ class CargosDB:
 
         # Округление до 0.1 кг и минимум 5 кг
         step = Decimal('0.1')
-        chargeable = (total_weight / step).to_integral_value(rounding=ROUND_UP) * step
+        billable_weight = total_weight + box_weight
+        chargeable = (billable_weight / step).to_integral_value(rounding=ROUND_UP) * step
         # if chargeable < Decimal('5.0'):
         #     chargeable = Decimal('5.0')
 
         delivery_cost = (chargeable * rate).quantize(Decimal('0.01'), rounding=ROUND_UP)
         return {
             'total_weight_kg': float(total_weight),
+            'box_weight_kg': float(box_weight),
+            'billable_weight_kg': float(billable_weight),
             'chargeable_weight_kg': float(chargeable),
             'rate_per_kg_usd': float(rate),
             'delivery_cost_usd': float(delivery_cost),
@@ -406,12 +413,407 @@ class CargosDB:
             return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}", *args)
         return await self.conn.fetchval(f"SELECT COUNT(*) FROM cargos WHERE {where}")
 
+    async def _setting_bool(self, key: str, default: bool = True) -> bool:
+        try:
+            value = await self.conn.fetchval(
+                "SELECT value FROM site_settings WHERE key = $1 LIMIT 1",
+                key,
+            )
+        except Exception:
+            return default
+        if value in (None, ''):
+            return default
+        return str(value).strip().lower() in {'1', 'true', 'yes', 'on', 'да', 'вкл'}
+
+    async def _setting_decimal(self, key: str, default: str = '0') -> Decimal:
+        try:
+            value = await self.conn.fetchval(
+                "SELECT value FROM site_settings WHERE key = $1 LIMIT 1",
+                key,
+            )
+        except Exception:
+            value = None
+        try:
+            return Decimal(str(value if value not in (None, '') else default))
+        except Exception:
+            return Decimal(default)
+
+    async def _setting_text(self, key: str, default: str = '') -> str:
+        try:
+            value = await self.conn.fetchval(
+                "SELECT value FROM site_settings WHERE key = $1 LIMIT 1",
+                key,
+            )
+        except Exception:
+            value = None
+        if value in (None, ''):
+            return default
+        return str(value).strip()
+
+    async def _ensure_referral_transaction_cargo_column(self) -> None:
+        await self.conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_referrals (
+            id BIGSERIAL PRIMARY KEY,
+            referrer_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            invited_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            source TEXT NULL,
+            note TEXT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS referral_transactions (
+            id BIGSERIAL PRIMARY KEY,
+            referral_id BIGINT NULL REFERENCES user_referrals(id) ON DELETE SET NULL,
+            cargo_id BIGINT NULL,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL DEFAULT 'earned',
+            amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            note TEXT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS user_referrals_referrer_idx ON user_referrals(referrer_id);
+        CREATE INDEX IF NOT EXISTS referral_transactions_user_idx ON referral_transactions(user_id);
+        CREATE INDEX IF NOT EXISTS referral_transactions_kind_idx ON referral_transactions(kind);
+
+        ALTER TABLE referral_transactions
+        ADD COLUMN IF NOT EXISTS cargo_id BIGINT NULL;
+
+        CREATE INDEX IF NOT EXISTS referral_transactions_cargo_idx
+        ON referral_transactions(cargo_id);
+        """)
+
+    async def _first_referral_cargo_ids(self, user_ids: list[int]) -> dict[int, int]:
+        if not user_ids:
+            return {}
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT ON (user_id) user_id, cargo_id
+            FROM items
+            WHERE user_id = ANY($1::bigint[])
+              AND cargo_id IS NOT NULL
+              AND removed_at IS NULL
+            ORDER BY user_id, created_at ASC, cargo_id ASC
+            """,
+            user_ids,
+        )
+        return {int(row['user_id']): int(row['cargo_id']) for row in rows}
+
+    async def _auto_first_order_discount_for_cargo(self, *, cargo_id: int) -> list[int]:
+        if not await self._setting_bool('referral.enabled', True):
+            return []
+        percent = await self._setting_decimal('referral.first_order_discount_percent', '10')
+        fixed_discount = await self._setting_decimal('referral.first_order_discount_usd', '0')
+        if percent <= 0 and fixed_discount <= 0:
+            return []
+
+        await self._ensure_referral_transaction_cargo_column()
+
+        user_ids = await self.conn.fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM items
+            WHERE cargo_id = $1
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
+              AND user_id IS NOT NULL
+            """,
+            cargo_id,
+        )
+        invited_ids = [int(row['user_id']) for row in user_ids]
+        if not invited_ids:
+            return []
+
+        referrals = await self.conn.fetch(
+            """
+            SELECT id, referrer_id, invited_id
+            FROM user_referrals
+            WHERE invited_id = ANY($1::bigint[])
+            """,
+            invited_ids,
+        )
+        first_cargos = await self._first_referral_cargo_ids([int(row['invited_id']) for row in referrals])
+        created_ids: list[int] = []
+
+        for referral in referrals:
+            invited_id = int(referral['invited_id'])
+            if first_cargos.get(invited_id) != cargo_id:
+                continue
+            already_applied = await self.conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM referral_transactions
+                    WHERE referral_id = $1
+                      AND user_id = $2
+                      AND kind = 'discount'
+                      AND note LIKE 'AUTO_FIRST_ORDER_DISCOUNT%'
+                )
+                """,
+                referral['id'],
+                invited_id,
+            )
+            if already_applied:
+                continue
+
+            base_amount = await self._referral_commission_base_for_invited(
+                cargo_id=cargo_id,
+                invited_id=invited_id,
+                base_kind='goods',
+            )
+            discount = (base_amount * percent / Decimal('100') + fixed_discount).quantize(
+                Decimal('0.01'),
+                rounding=ROUND_HALF_UP,
+            )
+            if discount <= 0:
+                continue
+
+            transaction_id = await self.conn.fetchval(
+                """
+                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, 'discount', $4, $5)
+                RETURNING id
+                """,
+                referral['id'],
+                cargo_id,
+                invited_id,
+                discount,
+                (
+                    f"AUTO_FIRST_ORDER_DISCOUNT: {percent}% of goods for invited user "
+                    f"{invited_id}, cargo {cargo_id}, base ${base_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}"
+                ),
+            )
+            created_ids.append(int(transaction_id))
+        return created_ids
+
+    async def _auto_referral_bonus_for_cargo(self, *, cargo_id: int) -> list[int]:
+        if not await self._setting_bool('referral.enabled', True):
+            return []
+        bonus = await self._setting_decimal('referral.referrer_bonus_usd', '0')
+        if bonus <= 0:
+            return []
+
+        await self._ensure_referral_transaction_cargo_column()
+
+        user_ids = await self.conn.fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM items
+            WHERE cargo_id = $1
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
+              AND user_id IS NOT NULL
+            """,
+            cargo_id,
+        )
+        invited_ids = [int(row['user_id']) for row in user_ids]
+        if not invited_ids:
+            return []
+
+        referrals = await self.conn.fetch(
+            """
+            SELECT id, referrer_id, invited_id
+            FROM user_referrals
+            WHERE invited_id = ANY($1::bigint[])
+            """,
+            invited_ids,
+        )
+        first_cargos = await self._first_referral_cargo_ids([int(row['invited_id']) for row in referrals])
+        created_ids: list[int] = []
+
+        for referral in referrals:
+            invited_id = int(referral['invited_id'])
+            if first_cargos.get(invited_id) != cargo_id:
+                continue
+            exists = await self.conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM referral_transactions
+                    WHERE referral_id = $1
+                      AND cargo_id = $2
+                      AND user_id = $3
+                      AND kind = 'earned'
+                      AND note LIKE 'AUTO_REFERRAL_BONUS%'
+                )
+                """,
+                referral['id'],
+                cargo_id,
+                referral['referrer_id'],
+            )
+            if exists:
+                continue
+            transaction_id = await self.conn.fetchval(
+                """
+                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, 'earned', $4, $5)
+                RETURNING id
+                """,
+                referral['id'],
+                cargo_id,
+                referral['referrer_id'],
+                bonus,
+                f"AUTO_REFERRAL_BONUS: first order bonus for invited user {invited_id}, cargo {cargo_id}",
+            )
+            created_ids.append(int(transaction_id))
+        return created_ids
+
+    async def _referral_commission_base_for_invited(self, *, cargo_id: int, invited_id: int, base_kind: str) -> Decimal:
+        rows = await self.conn.fetch(
+            """
+            SELECT
+                i.price,
+                i.quantity,
+                i.weight_kg,
+                i.cn_domestic_shipping,
+                u.rate AS user_rate,
+                COALESCE(cct.rate_per_kg_usd, ict.rate_per_kg_usd, 0) AS sell_msk_rate
+            FROM items i
+            JOIN users u ON u.id = i.user_id
+            LEFT JOIN cargos c ON c.id = i.cargo_id
+            LEFT JOIN cargo_types cct ON cct.id = c.cargo_type_id
+            LEFT JOIN cargo_types ict ON ict.id = i.item_type_id
+            WHERE i.cargo_id = $1
+              AND i.user_id = $2
+              AND i.removed_at IS NULL
+              AND i.is_out_of_stock = FALSE
+            """,
+            cargo_id,
+            invited_id,
+        )
+        purchase_rate_setting = await self._setting_decimal('profit.purchase_rate', '0')
+        sell_by_rate = await self._setting_decimal('profit.msk_to_by_sell_per_kg_usd', '1')
+        cost_msk_rate = await self._setting_decimal('profit.cn_to_msk_cost_per_kg_usd', '0')
+        cost_by_rate = await self._setting_decimal('profit.msk_to_by_cost_per_kg_usd', '0')
+
+        total = Decimal('0')
+        for row in rows:
+            quantity = Decimal(str(row['quantity'] or 1))
+            price = Decimal(str(row['price'] or 0))
+            weight = Decimal(str(row['weight_kg'] or 0)) * quantity
+            user_rate = Decimal(str(row['user_rate'] or 0))
+            purchase_rate = purchase_rate_setting if purchase_rate_setting > 0 else user_rate
+            cn_shipping = Decimal(str(row['cn_domestic_shipping'] or 0))
+            sell_msk_rate = Decimal(str(row['sell_msk_rate'] or 0))
+
+            goods_revenue = price * quantity * user_rate
+            if base_kind == 'profit':
+                revenue = goods_revenue + (cn_shipping * user_rate) + (weight * (sell_msk_rate + sell_by_rate))
+                cost = (price * quantity * purchase_rate) + (cn_shipping * purchase_rate) + (weight * (cost_msk_rate + cost_by_rate))
+                total += revenue - cost
+            else:
+                total += goods_revenue
+        return max(Decimal('0'), total)
+
+    async def _cargo_user_paid_total(self, *, cargo_id: int, user_id: int) -> Decimal:
+        row = await self.conn.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(amount_usd) FILTER (WHERE kind <> 'refund'), 0) AS paid,
+                COALESCE(SUM(amount_usd) FILTER (WHERE kind = 'refund'), 0) AS refund
+            FROM cargo_payments
+            WHERE cargo_id = $1 AND user_id = $2
+            """,
+            cargo_id,
+            user_id,
+        )
+        return Decimal(str(row['paid'] or 0)) - Decimal(str(row['refund'] or 0))
+
+    async def _auto_referral_commission_for_cargo(self, *, cargo_id: int) -> list[int]:
+        if not await self._setting_bool('referral.enabled', True):
+            return []
+        percent = await self._setting_decimal('referral.commission_percent', '5')
+        if percent <= 0:
+            return []
+        base_kind = (await self._setting_text('referral.commission_base', 'goods')).lower()
+        if base_kind not in {'goods', 'profit'}:
+            base_kind = 'goods'
+
+        await self._ensure_referral_transaction_cargo_column()
+
+        user_ids = await self.conn.fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM items
+            WHERE cargo_id = $1
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
+              AND user_id IS NOT NULL
+            """,
+            cargo_id,
+        )
+        invited_ids = [int(row['user_id']) for row in user_ids]
+        if not invited_ids:
+            return []
+
+        referrals = await self.conn.fetch(
+            """
+            SELECT id, referrer_id, invited_id
+            FROM user_referrals
+            WHERE invited_id = ANY($1::bigint[])
+            """,
+            invited_ids,
+        )
+        created_ids: list[int] = []
+
+        for referral in referrals:
+            invited_id = int(referral['invited_id'])
+            if await self._cargo_user_paid_total(cargo_id=cargo_id, user_id=invited_id) <= 0:
+                continue
+            exists = await self.conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM referral_transactions
+                    WHERE referral_id = $1
+                      AND cargo_id = $2
+                      AND user_id = $3
+                      AND kind = 'earned'
+                      AND note LIKE 'AUTO_REFERRAL_COMMISSION%'
+                )
+                """,
+                referral['id'],
+                cargo_id,
+                referral['referrer_id'],
+            )
+            if exists:
+                continue
+            base_amount = await self._referral_commission_base_for_invited(
+                cargo_id=cargo_id,
+                invited_id=invited_id,
+                base_kind=base_kind,
+            )
+            amount = (base_amount * percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            if amount <= 0:
+                continue
+            transaction_id = await self.conn.fetchval(
+                """
+                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, 'earned', $4, $5)
+                RETURNING id
+                """,
+                referral['id'],
+                cargo_id,
+                referral['referrer_id'],
+                amount,
+                f"AUTO_REFERRAL_COMMISSION: {percent}% of {base_kind} for invited user {invited_id}, cargo {cargo_id}, base ${base_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}",
+            )
+            created_ids.append(int(transaction_id))
+        return created_ids
+
     
     async def set_status(self, *, cargo_id: int, status: str) -> None:
         await self.conn.execute(
             "UPDATE cargos SET status=$2, updated_at=NOW() WHERE id=$1",
             cargo_id, status
         )
+        if status == 'closed':
+            try:
+                await self._auto_first_order_discount_for_cargo(cargo_id=cargo_id)
+                await self._auto_referral_bonus_for_cargo(cargo_id=cargo_id)
+                await self._auto_referral_commission_for_cargo(cargo_id=cargo_id)
+            except Exception as exc:
+                print(f"Failed to create referral operations for cargo {cargo_id}: {exc}")
 
     async def set_payment_status(self, *, cargo_id: int, status: str) -> None:
         await self.conn.execute(
@@ -464,6 +866,11 @@ class ItemsDB:
         'size': 'TEXT',
         'source_url': 'TEXT',
         'extra': "JSONB NOT NULL DEFAULT '{}'::jsonb",
+        'is_received': 'BOOLEAN NOT NULL DEFAULT FALSE',
+        'received_china_at': 'TIMESTAMP',
+        'received_by_at': 'TIMESTAMP',
+        'is_out_of_stock': 'BOOLEAN NOT NULL DEFAULT FALSE',
+        'removed_at': 'TIMESTAMP',
         'created_at': 'TIMESTAMP DEFAULT NOW()',
         'updated_at': 'TIMESTAMP DEFAULT NOW()'
     }
@@ -474,6 +881,17 @@ class ItemsDB:
     async def init(self) -> None:
         columns_sql = ', '.join(f"{col} {typ}" for col, typ in self.REQUIRED_COLUMNS.items())
         await self.conn.execute(f"CREATE TABLE IF NOT EXISTS items ({columns_sql})")
+        await self._check_and_add_columns()
+
+    async def _check_and_add_columns(self) -> None:
+        rows = await self.conn.fetch("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'items'
+        """)
+        existing_cols = {r['column_name'] for r in rows}
+        for col, typ in self.REQUIRED_COLUMNS.items():
+            if col not in existing_cols:
+                await self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
 
     async def add(
         self,
@@ -594,7 +1012,11 @@ class ItemsDB:
     
     async def total_spent_by_user(self, *, user_id: int) -> Decimal:
         value = await self.conn.fetchval(
-            "SELECT COALESCE(SUM(price * quantity), 0) FROM items WHERE user_id=$1",
+            """
+            SELECT COALESCE(SUM(price * quantity), 0)
+            FROM items
+            WHERE user_id=$1 AND is_out_of_stock = FALSE AND removed_at IS NULL
+            """,
             user_id
         )
         return Decimal(str(value or 0))
@@ -641,6 +1063,8 @@ class ItemsDB:
                 COALESCE(SUM(i.weight_kg * i.quantity), 0) AS total_weight_kg
             FROM items i
             WHERE i.cargo_id = $1 AND i.user_id = $2
+              AND i.is_out_of_stock = FALSE
+              AND i.removed_at IS NULL
             """,
             cargo_id, user_id
         )
@@ -656,7 +1080,12 @@ class ItemsDB:
         Удобно для settlement_by_cargo.
         """
         rows = await self.conn.fetch(
-            "SELECT DISTINCT user_id FROM items WHERE cargo_id=$1 ORDER BY user_id",
+            """
+            SELECT DISTINCT user_id
+            FROM items
+            WHERE cargo_id=$1 AND is_out_of_stock = FALSE AND removed_at IS NULL
+            ORDER BY user_id
+            """,
             cargo_id
         )
         return [r["user_id"] for r in rows]
@@ -708,7 +1137,15 @@ class ItemsDB:
         return [dict(r) for r in rows]
 
     async def users_in_cargo(self, *, cargo_id: int) -> List[int]:
-        rows = await self.conn.fetch("SELECT DISTINCT user_id FROM items WHERE cargo_id=$1", cargo_id)
+        rows = await self.conn.fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM items
+            WHERE cargo_id=$1 AND is_out_of_stock = FALSE AND removed_at IS NULL
+            ORDER BY user_id
+            """,
+            cargo_id,
+        )
         return [int(r['user_id']) for r in rows]
     
     async def sum_cny_for_user_in_cargo(self, *, cargo_id: int, user_id: int) -> Decimal:
@@ -758,7 +1195,57 @@ class CargoService:
         await self.items.init()
         await self.cargo_types.init()
         await self.pay.init()
-        # инициализация прочих таблиц как у тебя
+
+    async def recalculate_referrals(self, *, cargo_id: int | None = None, user_id: int | None = None) -> dict:
+        where = ["i.cargo_id IS NOT NULL", "i.removed_at IS NULL"]
+        args: list[int] = []
+        if cargo_id is not None:
+            args.append(int(cargo_id))
+            where.append(f"i.cargo_id = ${len(args)}")
+        if user_id is not None:
+            args.append(int(user_id))
+            where.append(f"i.user_id = ${len(args)}")
+
+        rows = await self.conn.fetch(
+            f"""
+            SELECT DISTINCT i.cargo_id, c.status
+            FROM items i
+            JOIN cargos c ON c.id = i.cargo_id
+            WHERE {' AND '.join(where)}
+            ORDER BY i.cargo_id
+            """,
+            *args,
+        )
+
+        discount_ids: list[int] = []
+        bonus_ids: list[int] = []
+        commission_ids: list[int] = []
+        processed_cargo_ids: list[int] = []
+
+        for row in rows:
+            current_cargo_id = int(row['cargo_id'])
+            processed_cargo_ids.append(current_cargo_id)
+            discount_ids.extend(
+                await self.cargos._auto_first_order_discount_for_cargo(cargo_id=current_cargo_id)
+            )
+            commission_ids.extend(
+                await self.cargos._auto_referral_commission_for_cargo(cargo_id=current_cargo_id)
+            )
+            if row['status'] == 'closed':
+                bonus_ids.extend(
+                    await self.cargos._auto_referral_bonus_for_cargo(cargo_id=current_cargo_id)
+                )
+
+        return {
+            "processed_cargos": len(processed_cargo_ids),
+            "processed_cargo_ids": processed_cargo_ids,
+            "discounts_created": len(discount_ids),
+            "discount_ids": discount_ids,
+            "bonuses_created": len(bonus_ids),
+            "bonus_ids": bonus_ids,
+            "commissions_created": len(commission_ids),
+            "commission_ids": commission_ids,
+        }
 
     async def _resolve_item_type_id(self, item_type_code: str) -> int:
         item_type_id = await self.cargo_types.get_id_by_code(code=item_type_code)
@@ -869,8 +1356,10 @@ class CargoService:
         cargo = await self.cargos.get(cargo_id=cargo_id)
 
         total_weight = Decimal(str(cargo.get('total_weight_kg') or 0))
+        box_weight = Decimal(str(cargo.get('box_weight_kg') or 0))
+        billable_weight = total_weight + box_weight
         step = Decimal('0.1')
-        chargeable = (total_weight / step).to_integral_value(rounding=ROUND_UP) * step  # кратно 0.1 кг
+        chargeable = (billable_weight / step).to_integral_value(rounding=ROUND_UP) * step  # кратно 0.1 кг
 
         # ---- Плечо 1: CN→MSK по тарифу из cargo_types ----
         ct = await self.cargo_types.get(cargo_type_id=cargo['cargo_type_id'])
@@ -893,6 +1382,8 @@ class CargoService:
         # Итоговая структура (settlement_by_cargo использует только delivery_cost_usd)
         return {
             'total_weight_kg': float(total_weight),
+            'box_weight_kg': float(box_weight),
+            'billable_weight_kg': float(billable_weight),
             'chargeable_weight_kg': float(chargeable),
             'cn_to_msk': {
                 'rate_per_kg_usd': float(r1),
@@ -924,6 +1415,8 @@ class CargoService:
         if not cargo:
             raise ValueError("Груз не найден")
 
+        await self.cargos._auto_first_order_discount_for_cargo(cargo_id=cargo_id)
+
         legs = await self.compute_pricing_two_legs(cargo_id=cargo_id)
         users = await self.items.users_in_cargo(cargo_id=cargo_id)
 
@@ -944,18 +1437,48 @@ class CargoService:
         leg2_total = Decimal(str(legs['msk_to_by']['delivery_cost_usd']))
 
         payments = await CargoPaymentsDB(conn=self.conn).sums_by_cargo_grouped(cargo_id=cargo_id)
+        referral_rows = await self.conn.fetch(
+            """
+            SELECT
+                user_id,
+                COALESCE(SUM(amount_usd), 0) AS total,
+                COALESCE(SUM(amount_usd) FILTER (
+                    WHERE note IS NULL OR note NOT LIKE 'AUTO_FIRST_ORDER_DISCOUNT%'
+                ), 0) AS manual,
+                COALESCE(SUM(amount_usd) FILTER (
+                    WHERE note LIKE 'AUTO_FIRST_ORDER_DISCOUNT%'
+                ), 0) AS first_order
+            FROM referral_transactions
+            WHERE cargo_id = $1 AND kind = 'discount'
+            GROUP BY user_id
+            """,
+            cargo_id,
+        )
+        referral_discounts = {
+            int(row["user_id"]): {
+                "total": Decimal(str(row["total"] or 0)).quantize(Decimal("0.01")),
+                "manual": Decimal(str(row["manual"] or 0)).quantize(Decimal("0.01")),
+                "first_order": Decimal(str(row["first_order"] or 0)).quantize(Decimal("0.01")),
+            }
+            for row in referral_rows
+        }
 
         rows: list[dict] = []
         for uid in users:
             goods_usd, weight_kg = await self.items.totals_for_user_in_cargo(cargo_id=cargo_id, user_id=uid)
 
             total_w = Decimal(str(legs.get("total_weight_kg", 0))) or Decimal("0")
+            box_w = Decimal(str(legs.get("box_weight_kg", 0))) or Decimal("0")
             share = (weight_kg / total_w) if total_w > 0 else Decimal("0")
 
             msk_total = Decimal(str(legs["cn_to_msk"]["delivery_cost_usd"]))
             by_total  = Decimal(str(legs["msk_to_by"]["delivery_cost_usd"]))
             msk_usd   = (msk_total * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
             by_usd    = (by_total  * share).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            box_weight_kg = (box_w * share).quantize(Decimal("0.001"), ROUND_HALF_UP)
+            box_usd = (
+                Decimal(str(legs["cn_to_msk"]["rate_per_kg_usd"])) * box_w * share
+            ).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
             # оплатёжки
             pay = payments
@@ -975,8 +1498,15 @@ class CargoService:
             # сумма недоплат по компонентам (только отрицательные; как положительное число)
             components_underpay = sum((-x) for x in (goods_diff, msk_diff, by_diff) if x < 0)
 
+            subtotal_due_usd = (goods_usd + msk_usd + by_usd).quantize(Decimal("0.01"))
+            referral = referral_discounts.get(uid, {})
+            referral_discount_usd = referral.get("total", Decimal("0.00"))
+            referral_manual_discount_usd = referral.get("manual", Decimal("0.00"))
+            referral_first_order_discount_usd = referral.get("first_order", Decimal("0.00"))
+            discount_overpay = max(Decimal("0"), referral_discount_usd - components_underpay)
+
             # итого к оплате до учёта авансов/прочего — это недоплаты
-            gross_due = components_underpay
+            gross_due = max(Decimal("0"), components_underpay - referral_discount_usd).quantize(Decimal("0.01"))
 
             # зачёт авансов/прочего в уменьшение к оплате
             net_due = (gross_due - advance_usd - other_usd).quantize(Decimal("0.01"))
@@ -988,7 +1518,7 @@ class CargoService:
                 refund_after_advance = Decimal("0.00")
 
             # итоговая переплата = переплата по компонентам + переплата от авансов
-            total_overpay = (components_overpay + refund_after_advance).quantize(Decimal("0.01"))
+            total_overpay = (components_overpay + discount_overpay + refund_after_advance).quantize(Decimal("0.01"))
 
             rows.append({
                 "user_id": uid,
@@ -997,7 +1527,13 @@ class CargoService:
                 "goods_paid_usd":     goods_paid_usd,
                 "msk_usd":            msk_usd,          "msk_paid_usd": msk_paid_usd,
                 "by_usd":             by_usd,           "by_paid_usd":  by_paid_usd,
+                "box_weight_kg":      box_weight_kg,
+                "box_usd":            box_usd,
                 "advance_usd":        advance_usd,
+                "subtotal_due_usd":   subtotal_due_usd,
+                "referral_discount_usd": referral_discount_usd,
+                "referral_manual_discount_usd": referral_manual_discount_usd,
+                "referral_first_order_discount_usd": referral_first_order_discount_usd,
                 "total_due_usd":      net_due,          # к оплате
                 "total_overpay_usd":  total_overpay,    # сумма всех переплат (по строкам + от авансов)
                 # для покомпонентного вывода:

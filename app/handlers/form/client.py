@@ -144,6 +144,8 @@ class FormClientHandler:
         request_id = await req_db.create_request(user_id=user_id, data=data)
 
         text = self.text_finish["admin_form"].format(**data, user_id=call.from_user.id, request_id=request_id)
+        if data.get("referrer_id"):
+            text += f"\n👥 Реферер: <code>{data['referrer_id']}</code>"
         kb = RequestsKB.decision_keyboard(request_id)
         await call.bot.send_message(chat_id=config.ADMIN_FORM_CHAT_ID, text=text, parse_mode="HTML", reply_markup=kb)
 

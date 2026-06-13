@@ -7,6 +7,8 @@ from config import CLEAR_RATE
 
 from keyboards import AdminFlowCallback, AdminKB
 from app.handlers.services.pdf_export import PDFExportService
+from app.utils import safe_delete
+from media import PhotoBank
 
 
 class AdminShipments:
@@ -40,7 +42,7 @@ class AdminShipments:
 
 
     async def menu(self, call: types.CallbackQuery):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         is_admin = await self.users.is_admin(user_id=call.from_user.id)
         if not is_admin:
@@ -48,13 +50,15 @@ class AdminShipments:
             return await call.answer(text=text, show_alert=True)
         
         text = "🛠 <b>Админ-панель</b>\nВыберите раздел:"
+        photo = PhotoBank.get_file('ADMIN_PANEL_IMAGE')
+
         kb = AdminKB.menu()
-        await call.message.answer(text=text, reply_markup=kb)
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
 
     async def shipments(self, call: types.CallbackQuery, callback_data: AdminFlowCallback | None = None):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         is_admin = await self.users.is_admin(user_id=call.from_user.id)
         if not is_admin:
@@ -89,11 +93,12 @@ class AdminShipments:
 
         text = f"📦 <b>Посылки</b> (админ) — {title} <code>[{page}/{total_pages}]</code>"
         kb = AdminKB.shipments_list(cargos=cargos, tab=tab, page=page, total_pages=total_pages, has_prev=page>1, has_next=page<total_pages)
-        await call.message.answer(text=text, reply_markup=kb)
+        photo = PhotoBank.get_file('CARGOS_IMAGE')
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
 
 
     async def open_shipment(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
 
@@ -159,7 +164,7 @@ class AdminShipments:
 
 
     async def status_menu(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
         cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
@@ -179,7 +184,7 @@ class AdminShipments:
 
     async def status_set(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
         await call.answer()
-        await call.message.delete()
+        await safe_delete(call.message)
 
         cargo_id = callback_data.id
         cargo = await self.cargo.cargos.get(cargo_id=cargo_id)
@@ -251,7 +256,7 @@ class AdminShipments:
 
 
     async def users_summary(self, call: types.CallbackQuery, callback_data: AdminFlowCallback):
-        await call.message.delete()
+        await safe_delete(call.message)
         cargo_id = callback_data.id
         settle = await self.cargo.settlement_by_cargo(cargo_id=cargo_id)
 
@@ -278,6 +283,12 @@ class AdminShipments:
             msk_line = line_for("🚚 CN→MSK", float(row["msk_usd"]),float(row["msk_paid_usd"]))
             by_line = line_for("🚛 MSK→BY", float(row["by_usd"]), float(row["by_paid_usd"]))
 
+            referral_discount = float(row.get("referral_discount_usd", 0) or 0)
+            finance_lines = [goods_line, msk_line, by_line]
+            if referral_discount > 0:
+                finance_lines.append(f"👥 Реф. скидка: <code>-{referral_discount:.2f}$</code>")
+            finance_text = "\n".join(finance_lines)
+
             adv = float(row["advance_usd"])
             total_due  = float(row["total_due_usd"])
             total_over = float(row.get("total_overpay_usd", 0.0))
@@ -295,7 +306,7 @@ class AdminShipments:
             lines.append(
                 f"👤 <b>{uid}</b> — {fio}\n"
                 f"📱 <code>{phone}</code>\n"
-                f"{goods_line}\n{msk_line}\n{by_line}\n{summary}"
+                f"{finance_text}\n{summary}"
             )
 
         text = "👥 <b>Сводка по людям</b>\n\n" + ("\n\n".join(lines) if lines else "Пусто")
@@ -315,7 +326,7 @@ class AdminShipments:
             if not file_id:
                 continue
             try:
-                tg_file = await bot.get_file(file_id)  # aiogram 3.x
+                tg_file = await bot.get_file(file_id)
                 buf = BytesIO()
                 await bot.download(tg_file, destination=buf)
                 result[it["id"]] = buf.getvalue()

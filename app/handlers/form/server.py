@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from keyboards.callback_data import RequestActionCallback
-from database import RequestsDB, UsersDB
+from database import CargoService, RequestsDB, UsersDB
 
 class FormServerHandler:
     def __init__(self, conn, admin_chat_id: int):
@@ -14,6 +14,7 @@ class FormServerHandler:
         self.admin_chat_id = admin_chat_id
         self.requests = RequestsDB(conn)
         self.user_db = UsersDB(conn)
+        self.cargo_service = CargoService(conn=conn)
 
         self.router.callback_query.register(
             self.on_decision,
@@ -47,6 +48,19 @@ class FormServerHandler:
 
             try:
                 await self.user_db.add_user(**user_fields)
+                referrer_id = self.__parse_referrer_id(data.get("referrer_id"))
+                if referrer_id and referrer_id != int(user_id):
+                    created = await self.user_db.create_referral_relationship(
+                        referrer_id=referrer_id,
+                        invited_id=int(user_id),
+                        source="bot_link",
+                        note="created after application approval",
+                    )
+                    if created:
+                        try:
+                            await self.cargo_service.recalculate_referrals(user_id=int(user_id))
+                        except Exception as exc:
+                            print(f"Failed to recalculate referrals for user {user_id}: {exc}")
             except Exception as e:
                 # можно логировать
                 await call.answer("Ошибка при сохранении пользователя", show_alert=True)
@@ -136,3 +150,11 @@ class FormServerHandler:
         }
         # Удалим пустые ключи, если не хочешь писать пустые строки
         return {k: v for k, v in fields.items() if v is not None}
+
+    @staticmethod
+    def __parse_referrer_id(value) -> int | None:
+        try:
+            referrer_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return referrer_id if referrer_id > 0 else None

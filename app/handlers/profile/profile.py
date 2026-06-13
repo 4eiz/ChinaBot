@@ -7,6 +7,7 @@ from database.orders import CargoService
 from decimal import Decimal
 
 from media import PhotoBank
+import config
 
 
 class ProfileHandler:
@@ -21,9 +22,10 @@ class ProfileHandler:
         # регистрируем хендлеры
         self.router.message.register(self.profile, Command("profile"))
         self.router.callback_query.register(self.open_profile, ProfileFlowCallback.filter(F.action.in_(["profile", "open", "back_to_profile"])))
+        self.router.callback_query.register(self.open_referrals, ProfileFlowCallback.filter(F.action == "referrals"))
         self.router.callback_query.register(self.back, ProfileFlowCallback.filter(F.action == "back"))
 
-    async def _render_profile(self, user_id: int) -> str:
+    async def _render_profile(self, user_id: int, bot_username: str | None = None) -> str:
         user = await self.users_db.get_user(user_id=user_id)
         if not user:
             return "❌ Пользователь не найден."
@@ -35,6 +37,9 @@ class ProfileHandler:
         parcels_count = await self.cargo_service.cargos.count_by_user(user_id=user_id)
         spent_total_yuan = await self.cargo_service.items.total_spent_by_user(user_id=user_id)
         spent_total_usd = (spent_total_yuan * course).quantize(Decimal("0.01"))
+        referral = await self.users_db.get_referral_overview(user_id=user_id)
+        username = (bot_username or config.BOT_USERNAME or "").strip().lstrip("@")
+        referral_link = f"https://t.me/{username}?start=ref_{user_id}" if username else ""
 
 
         text = (
@@ -42,9 +47,36 @@ class ProfileHandler:
             f"💳 <b>Баланс:</b> <code>{balance_usd}$</code>\n"
             f"💱 <b>Курс:</b> <code>{course}</code>\n"
             f"📦 <b>Посылок:</b> <code>{parcels_count}</code>\n"
-            f"📊 <b>Потрачено:</b> <code>{spent_total_usd}$</code>"
+            f"📊 <b>Потрачено:</b> <code>{spent_total_usd}$</code>\n\n"
+            f"👥 <b>Рефералы:</b> <code>{referral['invited_count']}</code>\n"
+            f"💸 <b>К выплате:</b> <code>{referral['balance']}$</code>"
         )
+        if referral_link:
+            text += f"\n🔗 <b>Ваша ссылка:</b>\n<code>{referral_link}</code>"
         return text
+
+    async def _bot_username(self, bot) -> str | None:
+        configured = (config.BOT_USERNAME or "").strip().lstrip("@")
+        if configured:
+            return configured
+        try:
+            me = await bot.get_me()
+            return (me.username or "").strip()
+        except Exception:
+            return None
+
+    async def _render_referrals(self, user_id: int, bot_username: str | None = None) -> str:
+        referral = await self.users_db.get_referral_overview(user_id=user_id)
+        username = (bot_username or config.BOT_USERNAME or "").strip().lstrip("@")
+        referral_link = f"https://t.me/{username}?start=ref_{user_id}" if username else "Бот не определил username"
+        return (
+            "👥 <b>Реферальная программа</b>\n\n"
+            f"🔗 <b>Ваша ссылка:</b>\n<code>{referral_link}</code>\n\n"
+            f"👤 <b>Приглашено клиентов:</b> <code>{referral['invited_count']}</code>\n"
+            f"🎁 <b>Начислено:</b> <code>{referral['earned']}$</code>\n"
+            f"💸 <b>К выплате:</b> <code>{referral['balance']}$</code>\n\n"
+            "Отправьте ссылку клиенту. Когда он зарегистрируется и сделает первый заказ, скидка применится автоматически, а бонус появится в CRM."
+        )
 
     async def profile(self, message: types.Message, state: FSMContext):
         if state:
@@ -52,7 +84,8 @@ class ProfileHandler:
 
         await message.delete()
 
-        text = await self._render_profile(user_id=message.from_user.id)
+        bot_username = await self._bot_username(message.bot)
+        text = await self._render_profile(user_id=message.from_user.id, bot_username=bot_username)
         is_admin = bool(await self.users_db.is_admin(user_id=message.from_user.id))
         kb = ProfileKB.main_menu(is_admin=is_admin)
 
@@ -66,7 +99,21 @@ class ProfileHandler:
 
         await call.message.delete()
 
-        text = await self._render_profile(user_id=call.from_user.id)
+        bot_username = await self._bot_username(call.bot)
+        text = await self._render_profile(user_id=call.from_user.id, bot_username=bot_username)
+        is_admin = bool(await self.users_db.is_admin(user_id=call.from_user.id))
+        kb = ProfileKB.main_menu(is_admin=is_admin)
+        photo = PhotoBank.get_file('PROFILE_IMAGE')
+
+        await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+
+    async def open_referrals(self, call: types.CallbackQuery, state: FSMContext):
+        if state:
+            await state.clear()
+
+        await call.message.delete()
+        bot_username = await self._bot_username(call.bot)
+        text = await self._render_referrals(user_id=call.from_user.id, bot_username=bot_username)
         is_admin = bool(await self.users_db.is_admin(user_id=call.from_user.id))
         kb = ProfileKB.main_menu(is_admin=is_admin)
         photo = PhotoBank.get_file('PROFILE_IMAGE')
