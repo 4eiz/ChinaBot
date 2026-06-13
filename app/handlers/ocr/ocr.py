@@ -106,7 +106,6 @@ class OCRHandler:
         await state.update_data(
             ocr=parsed,
             source_screenshot_file_id=file_id,
-            last_bot_message_id=None,
             current_field=None,
             product_photo_file_id=None,
             title=None,
@@ -559,14 +558,15 @@ class OCRHandler:
         await state.update_data(last_bot_message_id=sent.message_id)
 
     async def _progress_step(self, chat_id: int, state: FSMContext, label: str, step_index: int, total_steps: int,
-                             min_delay: float = 0.4, bar_len: int = 10):
+                             min_delay: float = 0, bar_len: int = 10):
         pct = max(0.0, min(1.0, step_index / total_steps))
         filled = int(round(bar_len * pct))
         empty = bar_len - filled
         bar = f"{'▰'*filled}{'▱'*empty} {int(pct*100)}%"
         text = f"⏳ {label}\n\n{bar}"
         await self._replace_message(chat_id, state, text=text, reply_markup=None)
-        await asyncio.sleep(min_delay)
+        if min_delay > 0:
+            await asyncio.sleep(min_delay)
 
     async def _download_largest_photo(self, message: Message) -> tuple[bytes, str]:
         largest = message.photo[-1]
