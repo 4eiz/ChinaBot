@@ -1,5 +1,6 @@
 import os
 import asyncpg
+import asyncio
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -24,7 +25,32 @@ DB_NAME_DATABASE = os.getenv('DB_NAME_DATABASE')
 DSN = f"postgresql://{DB_NAME}:{DB_PASSWORD}@{DB_IP}:{DB_PORT}/{DB_NAME_DATABASE}"
 
 
-CONNECTION_DATABASE: asyncpg.Connection = None
+class SerializedConnection:
+    def __init__(self, conn: asyncpg.Connection):
+        self._conn = conn
+        self._lock = asyncio.Lock()
+
+    async def execute(self, *args, **kwargs):
+        async with self._lock:
+            return await self._conn.execute(*args, **kwargs)
+
+    async def fetch(self, *args, **kwargs):
+        async with self._lock:
+            return await self._conn.fetch(*args, **kwargs)
+
+    async def fetchrow(self, *args, **kwargs):
+        async with self._lock:
+            return await self._conn.fetchrow(*args, **kwargs)
+
+    async def fetchval(self, *args, **kwargs):
+        async with self._lock:
+            return await self._conn.fetchval(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+CONNECTION_DATABASE: SerializedConnection | None = None
 async def connect_db():
     global CONNECTION_DATABASE
     conn = await asyncpg.connect(DSN)
@@ -43,7 +69,7 @@ async def connect_db():
         schema='pg_catalog'
     )
 
-    CONNECTION_DATABASE = conn
+    CONNECTION_DATABASE = SerializedConnection(conn)
 
 
 # АДМИН
@@ -54,13 +80,15 @@ ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 
 
 # НАСТРОЙКА АПИ
-API_URL = os.getenv('API_URL')
-API_USERNAME = os.getenv('API_USERNAME')
-API_PASSWORD = os.getenv('API_PASSWORD')
-SITE_API_URL = os.getenv('SITE_API_URL', 'http://127.0.0.1:8000')
-SITE_BOT_TOKEN = os.getenv('SITE_BOT_TOKEN') or BOT_TOKEN
+SITE_API_URL = os.getenv('SITE_API_URL', 'http://127.0.0.1:8028')
+SITE_INTEGRATION_SECRET = os.getenv('SITE_INTEGRATION_SECRET', '')
 SITE_OUTBOX_ENABLED = os.getenv('SITE_OUTBOX_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 SITE_OUTBOX_POLL_SECONDS = int(os.getenv('SITE_OUTBOX_POLL_SECONDS', '10') or '10')
+PRODUCT_RECOGNITION_BASE_URL = os.getenv('PRODUCT_RECOGNITION_BASE_URL', 'https://sub2api.robcargo.my/v1')
+PRODUCT_RECOGNITION_API_KEY = os.getenv('PRODUCT_RECOGNITION_API_KEY', '')
+PRODUCT_RECOGNITION_MODEL = os.getenv('PRODUCT_RECOGNITION_MODEL', 'gemini-2.5-flash')
+PRODUCT_RECOGNITION_API_MODE = os.getenv('PRODUCT_RECOGNITION_API_MODE', 'antigravity')
+PRODUCT_RECOGNITION_TIMEOUT_SECONDS = int(os.getenv('PRODUCT_RECOGNITION_TIMEOUT_SECONDS', '45') or '45')
 
 
 # ССЫЛКИ

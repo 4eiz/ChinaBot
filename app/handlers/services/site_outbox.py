@@ -16,14 +16,14 @@ class SiteOutboxPoller:
         *,
         bot: Bot,
         site_api_url: str,
-        bot_token: str,
+        integration_secret: str,
         admin_chat_id: str | int | None,
         poll_seconds: int = 10,
         enabled: bool = True,
     ):
         self.bot = bot
         self.site_api_url = (site_api_url or "").rstrip("/")
-        self.bot_token = bot_token or ""
+        self.integration_secret = integration_secret or ""
         self.admin_chat_id = admin_chat_id
         self.poll_seconds = max(int(poll_seconds or 10), 3)
         self.enabled = enabled
@@ -32,8 +32,8 @@ class SiteOutboxPoller:
         if not self.enabled:
             logger.info("Site outbox polling is disabled.")
             return
-        if not self.site_api_url or not self.bot_token:
-            logger.warning("Site outbox polling skipped: SITE_API_URL or SITE_BOT_TOKEN is empty.")
+        if not self.site_api_url or not self.integration_secret:
+            logger.warning("Site outbox polling skipped: SITE_API_URL or SITE_INTEGRATION_SECRET is empty.")
             return
 
         logger.info("Site outbox polling started.")
@@ -47,7 +47,7 @@ class SiteOutboxPoller:
             await asyncio.sleep(self.poll_seconds)
 
     async def poll_once(self):
-        headers = {"X-Telegram-Bot-Token": self.bot_token}
+        headers = {"X-Site-Integration-Secret": self.integration_secret}
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(f"{self.site_api_url}/api/profile/events/outbox/", params={"limit": 20}) as resp:
                 if resp.status != 200:

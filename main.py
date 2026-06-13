@@ -37,7 +37,7 @@ async def start():
     outbox_poller = SiteOutboxPoller(
         bot=config.bot,
         site_api_url=config.SITE_API_URL,
-        bot_token=config.SITE_BOT_TOKEN,
+        integration_secret=config.SITE_INTEGRATION_SECRET,
         admin_chat_id=config.ADMIN_CHAT_ID,
         poll_seconds=config.SITE_OUTBOX_POLL_SECONDS,
         enabled=config.SITE_OUTBOX_ENABLED,

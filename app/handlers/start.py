@@ -3,6 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest
 import aiohttp
 
 from database import UsersDB, RequestsDB, CargoService
@@ -61,6 +62,17 @@ class StartHandler:
         builder.adjust(1)
         return builder.as_markup()
 
+    @staticmethod
+    async def _safe_edit_text(message, text: str):
+        if not message:
+            return
+        try:
+            await message.edit_text(text)
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc):
+                return
+            raise
+
     async def _approve_site_login(self, token: str, user):
         site_api_url = (config.SITE_API_URL or "").rstrip("/")
         if not site_api_url:
@@ -72,7 +84,7 @@ class StartHandler:
             "name": user.first_name or "",
             "surname": user.last_name or "",
         }
-        headers = {"X-Telegram-Bot-Token": config.SITE_BOT_TOKEN or ""}
+        headers = {"X-Site-Integration-Secret": config.SITE_INTEGRATION_SECRET or ""}
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
@@ -152,19 +164,24 @@ class StartHandler:
         except Exception as exc:
             print(f"Failed to approve site login for {call.from_user.id}: {exc}")
             await call.answer("Не удалось подтвердить вход", show_alert=True)
-            await call.message.edit_text(
+            await self._safe_edit_text(
+                call.message,
                 "Не удалось подтвердить вход. Вернитесь на сайт и попробуйте начать вход заново."
             )
             return
 
         await call.answer("Вход подтвержден")
-        await call.message.edit_text(
+        await self._safe_edit_text(
+            call.message,
             "✅ Вход подтвержден. Вернитесь на сайт, кабинет откроется автоматически."
         )
 
     async def cancel_site_login(self, call: CallbackQuery):
         await call.answer("Вход отменен")
-        await call.message.edit_text("Вход отменен. На сайте можно начать новую попытку.")
+        await self._safe_edit_text(
+            call.message,
+            "Вход отменен. На сайте можно начать новую попытку.",
+        )
 
     async def start_info(self, call: CallbackQuery, callback_data: MenuCallback):
         await call.answer()
