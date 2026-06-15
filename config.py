@@ -91,8 +91,6 @@ PRODUCT_RECOGNITION_API_MODE = os.getenv('PRODUCT_RECOGNITION_API_MODE', 'antigr
 PRODUCT_RECOGNITION_TIMEOUT_SECONDS = int(os.getenv('PRODUCT_RECOGNITION_TIMEOUT_SECONDS', '45') or '45')
 
 
-# ССЫЛКИ
-INSTRUCTION_URL1 = os.getenv('INSTRUCTION_URL1')
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
 GUIDE_LINK = os.getenv("GUIDE_LINK", "https://t.me/your_guide_post")
 SUPPORT_TG = os.getenv("SUPPORT_TG", "@your_support_username")
