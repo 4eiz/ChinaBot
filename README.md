@@ -1,235 +1,163 @@
-<div align="center">
+# ChinaBot
 
-# 🇨🇳 ChinaBot
+Telegram bot for China parcel logistics. It works with the same PostgreSQL schema as ChinaSiteCRM and can also run standalone.
 
-**Telegram-бот для управления посылками из Китая**
-
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![aiogram](https://img.shields.io/badge/aiogram-3.x-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://aiogram.dev)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-asyncpg-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![OpenPyXL](https://img.shields.io/badge/Excel-openpyxl-217346?style=for-the-badge&logo=microsoft-excel&logoColor=white)](https://openpyxl.readthedocs.io)
-[![ReportLab](https://img.shields.io/badge/PDF-ReportLab-E9173A?style=for-the-badge)](https://reportlab.com)
-
-> Полноценная система для магазинов, работающих с доставкой из Китая: учёт товаров, управление посылками, OCR-распознавание, экспорт в PDF и Excel.
-
-</div>
-
----
-
-## 📋 О проекте
-
-**ChinaBot** — асинхронный Telegram-бот, написанный на Python с использованием фреймворка aiogram 3.x. Предназначен для автоматизации работы магазинов и посредников, занимающихся доставкой товаров из Китая. Бот поддерживает работу с клиентами и администраторами в едином интерфейсе.
-
-Текущая ветка `feature/expedition-excel-export` добавляет экспорт экспедиционных отчётов в формате Excel — **352 (CN→MSK с фото)** и **Садовод (текстовый бланк)**.
-
----
-
-## ✨ Возможности
-
-### 👤 Для клиентов
-- Регистрация через форму-анкету прямо в боте
-- Управление посылками: создание, добавление товаров, отслеживание статусов
-- Просмотр баланса и истории оплат
-- OCR-распознавание фото товаров с автоматическим заполнением данных
-- Поддержка и информационный раздел с ссылками на канал и инструкции
-
-### 🛠️ Для администраторов
-- Полный контроль над посылками и отправками
-- Управление платежами и расчётами (курс CNY/RUB)
-- Уведомления в чат администратора
-- Экспорт отчётов:
-  - 📄 **PDF-отчёт** — сводка по посылке с расчётами
-  - 🧾 **PDF-товары** — список всех товаров с фотографиями
-  - 📊 **Excel 352** — лист CN→MSK с фото товаров
-  - 📊 **Excel Садовод** — текстовый экспедиционный бланк
-
----
-
-## 🏗️ Архитектура
-
-Проект построен по принципу **ООП** — каждый модуль представлен классом с чёткой зоной ответственности.
-
-```
-ChinaBot/
-├── main.py                         # Точка входа, запуск бота
-├── config.py                       # Конфигурация, подключение к БД, Bot instance
-├── requirements.txt                # Зависимости
-├── .env-example                    # Пример переменных окружения
-│
-├── app/
-│   ├── routers.py                  # Регистрация всех роутеров
-│   └── handlers/
-│       ├── start.py                # StartHandler — главное меню
-│       ├── admin/
-│       │   ├── exports.py          # AdminExports — PDF и Excel экспорты
-│       │   ├── payments.py         # Управление платежами
-│       │   ├── shipments.py        # Управление отправками
-│       │   └── fsm.py              # FSM-состояния админки
-│       ├── form/                   # Регистрационная форма клиента
-│       ├── ocr/
-│       │   ├── ocr.py              # OCR-обработчик
-│       │   └── ocr_fsm.py          # FSM для OCR-процесса
-│       ├── profile/                # Профиль пользователя
-│       └── services/
-│           ├── pdf_export.py       # PDFExportService — генерация PDF
-│           ├── shipment_exporter.py # Excel-экспорт (352, Садовод)
-│           ├── admin_notifier.py   # Уведомления администраторам
-│           ├── user_notifier.py    # Уведомления пользователям
-│           ├── ocr_parser.py       # Парсинг OCR-ответов
-│           └── recognition.py     # Сервис распознавания изображений
-│
-├── database/
-│   ├── users.py                    # UsersDB — работа с пользователями
-│   ├── orders.py                   # CargoService — посылки и заказы
-│   └── form.py                     # RequestsDB — заявки на регистрацию
-│
-├── keyboards/                      # InlineKeyboard-фабрики
-└── media/                          # PhotoBank — хранение медиа-файлов
-```
-
----
-
-## ⚙️ Технологии
-
-| Компонент | Технология | Версия |
-|-----------|-----------|--------|
-| Фреймворк бота | aiogram | 3.21.0 |
-| База данных | PostgreSQL + asyncpg | 0.30.0 |
-| Генерация PDF | ReportLab | 4.4.3 |
-| Генерация Excel | openpyxl | 3.1.5 |
-| Изображения | Pillow | 11.3.0 |
-| Конфиг | python-dotenv | 1.1.1 |
-| Язык | Python | 3.11+ |
-
----
-
-## 🚀 Установка и запуск
-
-### 1. Клонирование репозитория
-
-```bash
-git clone https://github.com/4eiz/ChinaBot.git
-cd ChinaBot
-git checkout feature/expedition-excel-export
-```
-
-### 2. Создание виртуального окружения
-
-```bash
-python -m venv venv
-source venv/bin/activate        # Linux / macOS
-venv\Scripts\activate           # Windows
-```
-
-### 3. Установка зависимостей
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Настройка переменных окружения
-
-Скопируйте `.env-example` в `.env` и заполните все поля:
+## Quick Docker Start
 
 ```bash
 cp .env-example .env
 ```
 
-```env
-# Bot token (получить у @BotFather)
-BOT_TOKEN=
-
-# Название магазина
-SHOP_NAME=
-
-# PostgreSQL
-DB_NAME=
-DB_PASSWORD=
-DB_IP=
-DB_PORT=
-DB_NAME_DATABASE=
-
-# Администратор
-ADMIN_ID=
-ADMIN_NUMBER=
-ADMIN_FORM_CHAT_ID=
-ADMIN_CHAT_ID=
-
-# Внешний API (распознавание)
-PRODUCT_RECOGNITION_BASE_URL=https://sub2api.robcargo.my/v1
-PRODUCT_RECOGNITION_API_KEY=
-PRODUCT_RECOGNITION_MODEL=gemini-2.5-flash
-PRODUCT_RECOGNITION_API_MODE=antigravity
-PRODUCT_RECOGNITION_TIMEOUT_SECONDS=45
-
-# Ссылки
-CHANNEL_LINK=
-GUIDE_LINK=
-SUPPORT_TG=
-SUPPORT_EMAIL=
-SUPPORT_HOURS=
-
-# Курс юаня
-CLEAR_RATE=
-DEFAULT_RATE=0.1898
-```
-
-### 5. Запуск
+Edit `.env`, then:
 
 ```bash
+docker compose up -d --build
+```
+
+The standalone compose starts PostgreSQL and the bot. On first bot start it creates required tables and the first bot admin from `ADMIN_ID`.
+
+## Run With ChinaSiteCRM
+
+Recommended production layout:
+
+```text
+parent/
+  ChinaSiteCRM/
+  ChinaBot/
+```
+
+1. Configure `ChinaSiteCRM/.env`.
+2. Configure `ChinaBot/.env`.
+3. Make sure `SITE_INTEGRATION_SECRET` is identical in both files.
+4. Start from `ChinaSiteCRM`:
+
+```bash
+docker compose --profile bot up -d --build
+```
+
+In this mode the bot uses the site PostgreSQL container, so site profile and bot data stay in one place.
+
+## Environment Variables
+
+### Telegram
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `BOT_TOKEN` | yes | Token from BotFather. |
+| `BOT_USERNAME` | recommended | Bot username without `@`; used in profile links. |
+| `SHOP_NAME` | yes | Display name in bot messages. |
+
+### PostgreSQL
+
+Historical names are kept for compatibility with the existing code.
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `DB_NAME` | yes | PostgreSQL user name, not database name. |
+| `DB_PASSWORD` | yes | PostgreSQL password. |
+| `DB_IP` | yes | PostgreSQL host. In Docker: `db`. |
+| `DB_PORT` | yes | PostgreSQL port. |
+| `DB_NAME_DATABASE` | yes | PostgreSQL database name. |
+
+### Admins
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `ADMIN_ID` | yes | Telegram numeric id of the first bot admin. |
+| `ADMIN_NUMBER` | optional | Admin phone saved in the users table. |
+| `ADMIN_FORM_CHAT_ID` | optional | Chat where registration forms are sent. |
+| `ADMIN_CHAT_ID` | optional | Chat where admin notifications are sent. |
+
+### ChinaSiteCRM Integration
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `SITE_API_URL` | recommended | Backend URL. In shared Docker stack: `http://backend:8000`. |
+| `SITE_INTEGRATION_SECRET` | recommended | Shared secret. Must match ChinaSiteCRM `.env`. |
+| `SITE_OUTBOX_ENABLED` | no | `1` to poll site outbox events, `0` to disable. |
+| `SITE_OUTBOX_POLL_SECONDS` | no | Poll interval in seconds. |
+
+### Product Recognition
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `PRODUCT_RECOGNITION_BASE_URL` | yes for OCR | Sub2API base URL, usually ending with `/v1`. |
+| `PRODUCT_RECOGNITION_API_KEY` | yes for OCR | Sub2API API key. |
+| `PRODUCT_RECOGNITION_MODEL` | yes for OCR | Model name, for example `gemini-2.5-flash`. |
+| `PRODUCT_RECOGNITION_API_MODE` | yes for OCR | `antigravity` uses `/messages`; `chat_completions` uses `/chat/completions`. |
+| `PRODUCT_RECOGNITION_TIMEOUT_SECONDS` | no | Recognition request timeout. |
+
+If Sub2API returns `This group does not allow /v1/messages dispatch`, set:
+
+```env
+PRODUCT_RECOGNITION_API_MODE=chat_completions
+```
+
+### Public Links
+
+| Variable | Purpose |
+|---|---|
+| `CHANNEL_LINK` | Channel link shown in bot menu. |
+| `GUIDE_LINK` | Instruction link shown in bot menu and OCR flow. |
+| `SUPPORT_TG` | Support Telegram username. |
+| `SUPPORT_EMAIL` | Support email. |
+| `SUPPORT_HOURS` | Support working hours text. |
+
+`INSTRUCTION_URL1` was removed because the current code did not use it.
+
+### Rates And Export
+
+| Variable | Purpose |
+|---|---|
+| `CLEAR_RATE` | Internal cost CNY -> USD rate used in admin calculations. |
+| `DEFAULT_RATE` | Client CNY -> USD rate for new users. |
+| `YUAN_TO_RUB` | Optional CNY -> RUB rate for Excel export. |
+| `YUAN_TO_BYN` | Optional CNY -> BYN rate for expedition Excel export. |
+| `CARGO_XLSX_TEMPLATE` | Optional absolute path to custom cargo XLSX template. |
+| `EXPEDITION_XLSX_TEMPLATE` | Optional absolute path to custom expedition XLSX template. |
+
+## Local Run Without Docker
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+copy .env-example .env
 python main.py
 ```
 
----
+For Linux/macOS use:
 
-## 🗄️ База данных
+```bash
+source venv/bin/activate
+cp .env-example .env
+python main.py
+```
 
-Бот использует **PostgreSQL** с асинхронным драйвером `asyncpg`. Таблицы создаются автоматически при первом запуске через методы `init()` каждого DB-класса.
+## Database Bootstrap
 
-| Таблица | Класс | Описание |
-|---------|-------|----------|
-| `users` | `UsersDB` | Пользователи, баланс, курс, роли |
-| `cargo` / заказы | `CargoService` | Посылки, товары, отправки, расчёты |
-| `requests` | `RequestsDB` | Заявки на регистрацию |
+The bot creates/updates its own tables on startup:
 
-> При первом запуске автоматически создаётся администратор с `ADMIN_ID` из `.env`.
+- `users`;
+- `cargo_types`;
+- `cargos`;
+- `items`;
+- `cargo_payments`;
+- referral tables;
+- registration request table when the form flow is used.
 
----
+It also creates the first admin user from `ADMIN_ID` if no admin exists.
 
-## 📊 Экспорт данных
+## Useful Commands
 
-### PDF-отчёты
-Генерируются классом `PDFExportService` (ReportLab):
-- **Админ-отчёт** — сводка по посылке: пользователи, сегменты, суммы
-- **Отчёт по товарам** — каждый товар с фото, описанием, ценой
+```bash
+docker compose logs -f bot
+docker compose restart bot
+docker compose down
+```
 
-### Excel-экспорты (новая ветка)
-Функции `export_cn_msk_goods` и `export_text_form` из `shipment_exporter.py`:
-- **Excel 352** — формат CN→MSK, включает фотографии товаров, вставленные в ячейки
-- **Excel Садовод** — текстовый экспедиционный бланк без фото
+## Notes
 
----
-
-## 🔐 Безопасность
-
-- Все секреты хранятся в `.env` и никогда не попадают в репозиторий
-- Проверка `is_admin` выполняется на уровне БД при каждом запросе
-- Callback-хендлеры фильтруются по `AdminFlowCallback` — обычный пользователь не может вызвать admin-действия
-
----
-
-## 🤝 Вклад в проект
-
-1. Форкните репозиторий
-2. Создайте ветку: `git checkout -b feature/my-feature`
-3. Закоммитьте изменения: `git commit -m "feat: добавил новую функцию"`
-4. Сделайте push: `git push origin feature/my-feature`
-5. Откройте Pull Request
-
----
-
-<div align="center">
-
-Сделано с ❤️ для автоматизации работы с Китаем
-
-</div>
+- Do not commit real `.env` files.
+- For production with the website, prefer running the bot through the `ChinaSiteCRM` compose profile so both projects share one database.
+- If a variable is not listed in `.env-example`, it is not part of the supported deployment surface.
