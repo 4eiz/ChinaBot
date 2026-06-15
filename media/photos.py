@@ -15,14 +15,14 @@ class PhotoBank:
     SLIDE4 = BASE / "media/images/slide4.jpg"
 
     # 🧭 Основные фото
-    MENU_IMAGE = BASE / "media/images/menu.jpg"
-    PROFILE_IMAGE = BASE / "media/images/profile.jpg"
-    CARGOS_IMAGE = BASE / "media/images/cargos.jpg"
-    INFO_IMAGE = BASE / "media/images/info.jpg"
-    SUPPORT_IMAGE = BASE / "media/images/support.jpg"
+    MENU_IMAGE = BASE / "media/images/Menu.jpg"
+    PROFILE_IMAGE = BASE / "media/images/Profile.jpg"
+    CARGOS_IMAGE = BASE / "media/images/Cargos.jpg"
+    INFO_IMAGE = BASE / "media/images/Info.jpg"
+    SUPPORT_IMAGE = BASE / "media/images/Support.jpg"
 
     # 🔐 Админка
-    ADMIN_PANEL_IMAGE = BASE / "media/images/admin.jpg"
+    ADMIN_PANEL_IMAGE = BASE / "media/images/Admin.jpg"
 
     # 📦 Категории
     CATEGORY_HOUSEHOLD = BASE / "media/images/categories/household.jpg"
