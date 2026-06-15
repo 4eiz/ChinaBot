@@ -6,6 +6,7 @@ Telegram bot for China parcel logistics. It works with the same PostgreSQL schem
 
 ```bash
 cp .env-example .env
+docker network create china_stack
 ```
 
 Edit `.env`, then:
@@ -14,7 +15,7 @@ Edit `.env`, then:
 docker compose up -d --build
 ```
 
-The standalone compose starts PostgreSQL and the bot. On first bot start it creates required tables and the first bot admin from `ADMIN_ID`.
+The standalone compose starts PostgreSQL and the bot. The `china_stack` network lets the bot resolve `backend:8000` when ChinaSiteCRM is running on the same VM. On first bot start it creates required tables and the first bot admin from `ADMIN_ID`.
 
 ## Run With ChinaSiteCRM
 
@@ -35,7 +36,7 @@ parent/
 docker compose --profile bot up -d --build
 ```
 
-In this mode the bot uses the site PostgreSQL container, so site profile and bot data stay in one place.
+In this mode the bot uses the site PostgreSQL container, so site profile and bot data stay in one place. If you start `ChinaBot/docker-compose.yml` separately, keep `SITE_API_URL=http://backend:8000` and make sure the site stack has already created the `china_stack` Docker network.
 
 ## Environment Variables
 
@@ -72,7 +73,7 @@ Historical names are kept for compatibility with the existing code.
 
 | Variable | Required | Purpose |
 |---|---:|---|
-| `SITE_API_URL` | recommended | Backend URL. In shared Docker stack: `http://backend:8000`. |
+| `SITE_API_URL` | recommended | Backend URL. On the same VM/Docker network: `http://backend:8000`. |
 | `SITE_INTEGRATION_SECRET` | recommended | Shared secret. Must match ChinaSiteCRM `.env`. |
 | `SITE_OUTBOX_ENABLED` | no | `1` to poll site outbox events, `0` to disable. |
 | `SITE_OUTBOX_POLL_SECONDS` | no | Poll interval in seconds. |
