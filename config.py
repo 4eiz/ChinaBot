@@ -44,21 +44,32 @@ class DatabasePoolAdapter:
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
 
+    async def _run(self, method_name: str, *args, **kwargs):
+        last_error = None
+
+        for attempt in range(2):
+            try:
+                async with self._pool.acquire() as conn:
+                    method = getattr(conn, method_name)
+                    return await method(*args, **kwargs)
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError, OSError, TimeoutError) as exc:
+                last_error = exc
+                if attempt:
+                    break
+
+        raise last_error
+
     async def execute(self, *args, **kwargs):
-        async with self._pool.acquire() as conn:
-            return await conn.execute(*args, **kwargs)
+        return await self._run('execute', *args, **kwargs)
 
     async def fetch(self, *args, **kwargs):
-        async with self._pool.acquire() as conn:
-            return await conn.fetch(*args, **kwargs)
+        return await self._run('fetch', *args, **kwargs)
 
     async def fetchrow(self, *args, **kwargs):
-        async with self._pool.acquire() as conn:
-            return await conn.fetchrow(*args, **kwargs)
+        return await self._run('fetchrow', *args, **kwargs)
 
     async def fetchval(self, *args, **kwargs):
-        async with self._pool.acquire() as conn:
-            return await conn.fetchval(*args, **kwargs)
+        return await self._run('fetchval', *args, **kwargs)
 
     def transaction(self):
         return _PoolTransaction(self._pool)
