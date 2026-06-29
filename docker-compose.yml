@@ -1,5 +1,6 @@
 services:
   db:
+    profiles: ["local-db"]
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -20,12 +21,6 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    environment:
-      DB_IP: db
-      DB_PORT: 5432
-    depends_on:
-      db:
-        condition: service_healthy
     networks:
       - bot
       - china_stack
