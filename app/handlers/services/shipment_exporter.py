@@ -199,17 +199,14 @@ class ExcelExportService:
             try:
                 tg_file = await self.bot.get_file(file_id)
                 buf = io.BytesIO()
-                if getattr(tg_file, "file_path", None):
-                    await self.bot.download_file(tg_file.file_path, buf)
-                else:
-                    await self.bot.download(tg_file, destination=buf)
+                await self.bot.download(tg_file, destination=buf)
                 return buf.getvalue()
             except Exception as exc:
                 logger.warning("Failed to download item photo for Excel export: %s", exc)
                 try:
                     tg_file = await self.bot.get_file(file_id)
                     buf = io.BytesIO()
-                    await self.bot.download(tg_file, destination=buf)
+                    await self.bot.download_file(tg_file.file_path, buf)
                     return buf.getvalue()
                 except Exception as fallback_exc:
                     logger.warning("Failed to download item photo via fallback for Excel export: %s", fallback_exc)
@@ -287,6 +284,8 @@ class ExcelExportService:
             for it in items
         ]
         photos_raw = await asyncio.gather(*[self._download_photo_bytes(fid) for fid in file_ids])
+        photo_ids_count = sum(1 for fid in file_ids if fid)
+        downloaded_photos_count = sum(1 for photo in photos_raw if photo)
 
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(f"Excel-шаблон не найден: {self.template_path}")
@@ -296,6 +295,7 @@ class ExcelExportService:
 
         row = 2
         cell = ws.cell
+        inserted_photos_count = 0
         for i, it in enumerate(items, 1):
             title = it.get("title") or "Без названия"
             link = it.get("source_url") or ""
@@ -358,8 +358,18 @@ class ExcelExportService:
                     ext = XDRPositiveSize2D(cx=w_px * 9525, cy=h_px * 9525)
                     anchor = OneCellAnchor(_from=marker, ext=ext)
                     ws.add_image(xl_img, anchor)
+                    inserted_photos_count += 1
 
             row += 1
+
+        logger.info(
+            "Excel 352 export cargo %s: items=%s, photo_ids=%s, downloaded=%s, inserted=%s",
+            cargo_id,
+            len(items),
+            photo_ids_count,
+            downloaded_photos_count,
+            inserted_photos_count,
+        )
 
         today = datetime.now().strftime("%Y%m%d")
         tmpdir = tempfile.gettempdir()
