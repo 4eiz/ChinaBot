@@ -192,9 +192,27 @@ class ExcelExportService:
         height_px = await self._points_to_pixels(row_pt)
         return int(width_px), int(height_px)
 
-    async def _download_photo_bytes(self, file_id: Optional[str]) -> Optional[bytes]:
+    async def _download_site_media_bytes(self, token: Optional[str], conn=None) -> Optional[bytes]:
+        if not token or conn is None:
+            return None
+        try:
+            row = await conn.fetchrow(
+                "SELECT content FROM profile_uploaded_media WHERE token = $1",
+                token,
+            )
+            if row and row.get("content"):
+                return bytes(row["content"])
+        except Exception as exc:
+            logger.debug("Profile media lookup skipped for Excel export: %s", exc)
+        return None
+
+    async def _download_photo_bytes(self, file_id: Optional[str], conn=None) -> Optional[bytes]:
         if not file_id:
             return None
+        site_media = await self._download_site_media_bytes(file_id, conn=conn)
+        if site_media:
+            return site_media
+
         async with self.sema:
             try:
                 tg_file = await self.bot.get_file(file_id)
@@ -283,7 +301,10 @@ class ExcelExportService:
             or it.get("photo_id")
             for it in items
         ]
-        photos_raw = await asyncio.gather(*[self._download_photo_bytes(fid) for fid in file_ids])
+        photos_raw = await asyncio.gather(*[
+            self._download_photo_bytes(fid, conn=getattr(cargo_service, "conn", None))
+            for fid in file_ids
+        ])
         photo_ids_count = sum(1 for fid in file_ids if fid)
         downloaded_photos_count = sum(1 for photo in photos_raw if photo)
 
