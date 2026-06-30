@@ -114,7 +114,8 @@ PRODUCT_RECOGNITION_API_MODE=chat_completions
 | `DEFAULT_RATE` | Client CNY -> USD rate for new users. |
 | `YUAN_TO_RUB` | Optional CNY -> RUB rate for Excel export. |
 | `YUAN_TO_BYN` | Optional CNY -> BYN rate for expedition Excel export. |
-| `CARGO_XLSX_TEMPLATE` | Optional absolute path to custom cargo XLSX template. |
+| `CARGO_XLSX_TEMPLATE` | Optional path to custom 352 cargo XLSX template. Relative paths are resolved from the bot project root. |
+| `SADOVOD_XLSX_TEMPLATE` | Optional path to custom Sadovod XLSX template. Relative paths are resolved from the bot project root. |
 | `EXPEDITION_XLSX_TEMPLATE` | Optional absolute path to custom expedition XLSX template. |
 
 ## Local Run Without Docker

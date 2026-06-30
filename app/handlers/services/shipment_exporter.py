@@ -6,6 +6,7 @@ import copy
 import tempfile
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 
 import asyncio
@@ -16,6 +17,24 @@ from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor, XD
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from PIL import Image as PILImage
+
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+
+
+def resolve_template_path(*, explicit: Optional[str], env_names: Tuple[str, ...], default_relative: str) -> str:
+    raw_path = explicit
+    if not raw_path:
+        for env_name in env_names:
+            raw_path = os.getenv(env_name)
+            if raw_path:
+                break
+    raw_path = raw_path or default_relative
+
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return str(path)
 
 
 # ============================================================
@@ -75,10 +94,10 @@ class ExcelExportService:
         photo_inner_padding_px: int = 6,
     ) -> None:
         self.bot = bot
-        self.template_path = (
-            template_path
-            or os.getenv("CARGO_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "cargo.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("CARGO_XLSX_TEMPLATE",),
+            default_relative=os.path.join("media", "excel", "cargo.xlsx"),
         )
         self.sema = asyncio.Semaphore(int(max_concurrency))
         self.photo_inner_padding_px = int(photo_inner_padding_px)
@@ -300,10 +319,10 @@ class ExcelTextFormExportService:
         total_label: str = "Всего",
         yuan_to_rub: Optional[Decimal] = None,
     ) -> None:
-        self.template_path = (
-            template_path
-            or os.getenv("CARGO_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "sadovod.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("SADOVOD_XLSX_TEMPLATE", "TEXT_FORM_XLSX_TEMPLATE"),
+            default_relative=os.path.join("media", "excel", "sadovod.xlsx"),
         )
         if not self.template_path:
             raise ValueError("Не указан template_path и не задан ENV TEXT_FORM_XLSX_TEMPLATE")
@@ -501,10 +520,10 @@ class ExpeditionExportService:
         template_path: Optional[str] = None,
         yuan_to_byn: Optional[Decimal] = None,
     ) -> None:
-        self.template_path = (
-            template_path
-            or os.getenv("EXPEDITION_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "expedition.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("EXPEDITION_XLSX_TEMPLATE",),
+            default_relative=os.path.join("media", "excel", "expedition.xlsx"),
         )
         env_rate = os.getenv("YUAN_TO_BYN") or "0.34"
         self.yuan_to_byn = (
