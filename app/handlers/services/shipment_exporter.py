@@ -3,6 +3,7 @@ import os
 import io
 import json
 import copy
+import logging
 import tempfile
 from datetime import datetime
 from decimal import Decimal
@@ -20,6 +21,7 @@ from PIL import Image as PILImage
 
 
 BASE_DIR = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
 
 
 def resolve_template_path(*, explicit: Optional[str], env_names: Tuple[str, ...], default_relative: str) -> str:
@@ -197,10 +199,21 @@ class ExcelExportService:
             try:
                 tg_file = await self.bot.get_file(file_id)
                 buf = io.BytesIO()
-                await self.bot.download(tg_file, destination=buf)
+                if getattr(tg_file, "file_path", None):
+                    await self.bot.download_file(tg_file.file_path, buf)
+                else:
+                    await self.bot.download(tg_file, destination=buf)
                 return buf.getvalue()
-            except Exception:
-                return None
+            except Exception as exc:
+                logger.warning("Failed to download item photo for Excel export: %s", exc)
+                try:
+                    tg_file = await self.bot.get_file(file_id)
+                    buf = io.BytesIO()
+                    await self.bot.download(tg_file, destination=buf)
+                    return buf.getvalue()
+                except Exception as fallback_exc:
+                    logger.warning("Failed to download item photo via fallback for Excel export: %s", fallback_exc)
+                    return None
 
     async def _process_image_to_png_fit_box(
         self,
@@ -267,7 +280,12 @@ class ExcelExportService:
 
     async def generate_goods_sheet(self, *, cargo_service, cargo_id: int) -> str:
         items: List[dict] = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
-        file_ids = [it.get("photo_file_id") for it in items]
+        file_ids = [
+            it.get("photo_file_id")
+            or it.get("product_photo_file_id")
+            or it.get("photo_id")
+            for it in items
+        ]
         photos_raw = await asyncio.gather(*[self._download_photo_bytes(fid) for fid in file_ids])
 
         if not os.path.exists(self.template_path):
