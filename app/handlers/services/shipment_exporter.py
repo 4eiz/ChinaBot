@@ -72,6 +72,7 @@ class ExcelExportService:
     # S 19  — цвет строго
     COL_INDEX = {
         "num": 1,              # A
+        "example": 2,          # B
         "title": 3,            # C
         "link": 4,             # D
         "color": 6,            # F
@@ -80,10 +81,21 @@ class ExcelExportService:
         "brand": 9,            # I
         "size": 10,            # J
         "notes": 11,           # K
+        "packaging": 12,       # L
         "qty": 13,             # M
         "unit_price": 14,      # N
+        "domestic_delivery": 15,  # O
+        "replacement_link": 17,   # Q
+        "remove_box": 18,         # R
         "strict_color": 19,    # S
     }
+    OPTIONAL_CLEAR_COLUMNS = (
+        "example",
+        "packaging",
+        "domestic_delivery",
+        "replacement_link",
+        "remove_box",
+    )
 
     def __init__(
         self,
@@ -215,6 +227,44 @@ class ExcelExportService:
                 return None
         return await asyncio.to_thread(_work)
 
+    def _get_goods_sheet(self, wb):
+        for name in ("Товары", "РўРѕРІР°СЂС‹"):
+            if name in wb.sheetnames:
+                return wb[name]
+
+        for ws in wb.worksheets:
+            a1 = str(ws.cell(1, 1).value or "").lower()
+            c1 = str(ws.cell(1, 3).value or "").lower()
+            m1 = str(ws.cell(1, 13).value or "").lower()
+            if ("номер" in a1 or "пози" in a1) and ("наимен" in c1 or "товар" in c1) and ("кол" in m1 or "数量" in m1):
+                return ws
+
+        if len(wb.worksheets) > 1:
+            return wb.worksheets[1]
+        return wb.active
+
+    def _prepare_goods_sheet(self, ws) -> None:
+        ws._images = []
+
+        for row in range(2, max(ws.max_row, 2) + 1):
+            for key in self.OPTIONAL_CLEAR_COLUMNS:
+                ws.cell(row=row, column=self.COL_INDEX[key]).value = None
+
+            if row == 2:
+                for key in (
+                    "title",
+                    "link",
+                    "color",
+                    "material",
+                    "cn_title",
+                    "brand",
+                    "size",
+                    "notes",
+                    "qty",
+                    "unit_price",
+                ):
+                    ws.cell(row=row, column=self.COL_INDEX[key]).value = None
+
     async def generate_goods_sheet(self, *, cargo_service, cargo_id: int) -> str:
         items: List[dict] = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
         file_ids = [it.get("photo_file_id") for it in items]
@@ -223,7 +273,8 @@ class ExcelExportService:
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(f"Excel-шаблон не найден: {self.template_path}")
         wb = load_workbook(self.template_path)
-        ws = wb["Товары"] if "Товары" in wb.sheetnames else wb.active
+        ws = self._get_goods_sheet(wb)
+        self._prepare_goods_sheet(ws)
 
         row = 2
         cell = ws.cell
