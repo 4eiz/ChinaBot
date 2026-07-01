@@ -1,9 +1,9 @@
-import os
-import asyncpg
-import asyncio
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
+
+import asyncpg
 from aiogram import Bot
 from aiogram.client.bot import DefaultBotProperties
 from dotenv import load_dotenv
@@ -25,51 +25,95 @@ DB_NAME_DATABASE = os.getenv('DB_NAME_DATABASE')
 DSN = f"postgresql://{DB_NAME}:{DB_PASSWORD}@{DB_IP}:{DB_PORT}/{DB_NAME_DATABASE}"
 
 
-class SerializedConnection:
-    def __init__(self, conn: asyncpg.Connection):
-        self._conn = conn
-        self._lock = asyncio.Lock()
-
-    async def execute(self, *args, **kwargs):
-        async with self._lock:
-            return await self._conn.execute(*args, **kwargs)
-
-    async def fetch(self, *args, **kwargs):
-        async with self._lock:
-            return await self._conn.fetch(*args, **kwargs)
-
-    async def fetchrow(self, *args, **kwargs):
-        async with self._lock:
-            return await self._conn.fetchrow(*args, **kwargs)
-
-    async def fetchval(self, *args, **kwargs):
-        async with self._lock:
-            return await self._conn.fetchval(*args, **kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-
-CONNECTION_DATABASE: SerializedConnection | None = None
-async def connect_db():
-    global CONNECTION_DATABASE
-    conn = await asyncpg.connect(DSN)
-
-    # ВКЛЮЧАЕМ авто-кодек для json / jsonb
+async def _setup_connection(conn: asyncpg.Connection) -> None:
     await conn.set_type_codec(
         'json',
         encoder=json.dumps,
         decoder=json.loads,
-        schema='pg_catalog'
+        schema='pg_catalog',
     )
     await conn.set_type_codec(
         'jsonb',
         encoder=json.dumps,
         decoder=json.loads,
-        schema='pg_catalog'
+        schema='pg_catalog',
     )
 
-    CONNECTION_DATABASE = SerializedConnection(conn)
+
+class DatabasePoolAdapter:
+    def __init__(self, pool: asyncpg.Pool):
+        self._pool = pool
+
+    async def _run(self, method_name: str, *args, **kwargs):
+        last_error = None
+
+        for attempt in range(2):
+            try:
+                async with self._pool.acquire() as conn:
+                    method = getattr(conn, method_name)
+                    return await method(*args, **kwargs)
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError, OSError, TimeoutError) as exc:
+                last_error = exc
+                if attempt:
+                    break
+
+        raise last_error
+
+    async def execute(self, *args, **kwargs):
+        return await self._run('execute', *args, **kwargs)
+
+    async def fetch(self, *args, **kwargs):
+        return await self._run('fetch', *args, **kwargs)
+
+    async def fetchrow(self, *args, **kwargs):
+        return await self._run('fetchrow', *args, **kwargs)
+
+    async def fetchval(self, *args, **kwargs):
+        return await self._run('fetchval', *args, **kwargs)
+
+    def transaction(self):
+        return _PoolTransaction(self._pool)
+
+    async def close(self) -> None:
+        await self._pool.close()
+
+
+class _PoolTransaction:
+    def __init__(self, pool: asyncpg.Pool):
+        self._pool = pool
+        self._connection = None
+        self._transaction = None
+
+    async def __aenter__(self):
+        self._connection = await self._pool.acquire()
+        self._transaction = self._connection.transaction()
+        await self._transaction.__aenter__()
+        return self._connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            return await self._transaction.__aexit__(exc_type, exc, tb)
+        finally:
+            await self._pool.release(self._connection)
+
+
+CONNECTION_DATABASE: DatabasePoolAdapter | None = None
+
+
+async def connect_db():
+    global CONNECTION_DATABASE
+    pool = await asyncpg.create_pool(
+        dsn=DSN,
+        min_size=int(os.getenv('DB_POOL_MIN_SIZE', '1') or '1'),
+        max_size=int(os.getenv('DB_POOL_MAX_SIZE', '10') or '10'),
+        init=_setup_connection,
+    )
+    CONNECTION_DATABASE = DatabasePoolAdapter(pool)
+
+
+async def close_db():
+    if CONNECTION_DATABASE is not None:
+        await CONNECTION_DATABASE.close()
 
 
 # АДМИН

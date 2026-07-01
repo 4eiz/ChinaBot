@@ -3,9 +3,11 @@ import os
 import io
 import json
 import copy
+import logging
 import tempfile
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 
 import asyncio
@@ -16,6 +18,25 @@ from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor, XD
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from PIL import Image as PILImage
+
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
+
+
+def resolve_template_path(*, explicit: Optional[str], env_names: Tuple[str, ...], default_relative: str) -> str:
+    raw_path = explicit
+    if not raw_path:
+        for env_name in env_names:
+            raw_path = os.getenv(env_name)
+            if raw_path:
+                break
+    raw_path = raw_path or default_relative
+
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return str(path)
 
 
 # ============================================================
@@ -36,8 +57,24 @@ class ExcelExportService:
     """
 
     PHOTO_COL_LETTER = "E"
+    # Индексы колонок соответствуют шаблону cargo.xlsx (заголовки в файле).
+    #
+    # A  1  — №
+    # C  3  — Наименование
+    # D  4  — Ссылка
+    # E  5  — Фото
+    # F  6  — Цвет
+    # G  7  — Материал
+    # H  8  — «中文品名» / Китайское наименование
+    # I  9  — Бренд
+    # J 10  — Размер
+    # K 11  — Примечания
+    # M 13  — Кол-во
+    # N 14  — Цена за 1 ед. (¥)
+    # S 19  — цвет строго
     COL_INDEX = {
         "num": 1,              # A
+        "example": 2,          # B
         "title": 3,            # C
         "link": 4,             # D
         "color": 6,            # F
@@ -46,10 +83,21 @@ class ExcelExportService:
         "brand": 9,            # I
         "size": 10,            # J
         "notes": 11,           # K
+        "packaging": 12,       # L
         "qty": 13,             # M
         "unit_price": 14,      # N
+        "domestic_delivery": 15,  # O
+        "replacement_link": 17,   # Q
+        "remove_box": 18,         # R
         "strict_color": 19,    # S
     }
+    OPTIONAL_CLEAR_COLUMNS = (
+        "example",
+        "packaging",
+        "domestic_delivery",
+        "replacement_link",
+        "remove_box",
+    )
 
     def __init__(
         self,
@@ -60,10 +108,10 @@ class ExcelExportService:
         photo_inner_padding_px: int = 6,
     ) -> None:
         self.bot = bot
-        self.template_path = (
-            template_path
-            or os.getenv("CARGO_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "cargo.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("CARGO_XLSX_TEMPLATE",),
+            default_relative=os.path.join("media", "excel", "cargo.xlsx"),
         )
         self.sema = asyncio.Semaphore(int(max_concurrency))
         self.photo_inner_padding_px = int(photo_inner_padding_px)
@@ -144,17 +192,43 @@ class ExcelExportService:
         height_px = await self._points_to_pixels(row_pt)
         return int(width_px), int(height_px)
 
-    async def _download_photo_bytes(self, file_id: Optional[str]) -> Optional[bytes]:
+    async def _download_site_media_bytes(self, token: Optional[str], conn=None) -> Optional[bytes]:
+        if not token or conn is None:
+            return None
+        try:
+            row = await conn.fetchrow(
+                "SELECT content FROM profile_uploaded_media WHERE token = $1",
+                token,
+            )
+            if row and row.get("content"):
+                return bytes(row["content"])
+        except Exception as exc:
+            logger.debug("Profile media lookup skipped for Excel export: %s", exc)
+        return None
+
+    async def _download_photo_bytes(self, file_id: Optional[str], conn=None) -> Optional[bytes]:
         if not file_id:
             return None
+        site_media = await self._download_site_media_bytes(file_id, conn=conn)
+        if site_media:
+            return site_media
+
         async with self.sema:
             try:
                 tg_file = await self.bot.get_file(file_id)
                 buf = io.BytesIO()
                 await self.bot.download(tg_file, destination=buf)
                 return buf.getvalue()
-            except Exception:
-                return None
+            except Exception as exc:
+                logger.warning("Failed to download item photo for Excel export: %s", exc)
+                try:
+                    tg_file = await self.bot.get_file(file_id)
+                    buf = io.BytesIO()
+                    await self.bot.download_file(tg_file.file_path, buf)
+                    return buf.getvalue()
+                except Exception as fallback_exc:
+                    logger.warning("Failed to download item photo via fallback for Excel export: %s", fallback_exc)
+                    return None
 
     async def _process_image_to_png_fit_box(
         self,
@@ -181,18 +255,68 @@ class ExcelExportService:
                 return None
         return await asyncio.to_thread(_work)
 
+    def _get_goods_sheet(self, wb):
+        for name in ("Товары", "РўРѕРІР°СЂС‹"):
+            if name in wb.sheetnames:
+                return wb[name]
+
+        for ws in wb.worksheets:
+            a1 = str(ws.cell(1, 1).value or "").lower()
+            c1 = str(ws.cell(1, 3).value or "").lower()
+            m1 = str(ws.cell(1, 13).value or "").lower()
+            if ("номер" in a1 or "пози" in a1) and ("наимен" in c1 or "товар" in c1) and ("кол" in m1 or "数量" in m1):
+                return ws
+
+        if len(wb.worksheets) > 1:
+            return wb.worksheets[1]
+        return wb.active
+
+    def _prepare_goods_sheet(self, ws) -> None:
+        ws._images = []
+
+        for row in range(2, max(ws.max_row, 2) + 1):
+            for key in self.OPTIONAL_CLEAR_COLUMNS:
+                ws.cell(row=row, column=self.COL_INDEX[key]).value = None
+
+            if row == 2:
+                for key in (
+                    "title",
+                    "link",
+                    "color",
+                    "material",
+                    "cn_title",
+                    "brand",
+                    "size",
+                    "notes",
+                    "qty",
+                    "unit_price",
+                ):
+                    ws.cell(row=row, column=self.COL_INDEX[key]).value = None
+
     async def generate_goods_sheet(self, *, cargo_service, cargo_id: int) -> str:
         items: List[dict] = await cargo_service.items.list_by_cargo(cargo_id=cargo_id)
-        file_ids = [it.get("photo_file_id") for it in items]
-        photos_raw = await asyncio.gather(*[self._download_photo_bytes(fid) for fid in file_ids])
+        file_ids = [
+            it.get("photo_file_id")
+            or it.get("product_photo_file_id")
+            or it.get("photo_id")
+            for it in items
+        ]
+        photos_raw = await asyncio.gather(*[
+            self._download_photo_bytes(fid, conn=getattr(cargo_service, "conn", None))
+            for fid in file_ids
+        ])
+        photo_ids_count = sum(1 for fid in file_ids if fid)
+        downloaded_photos_count = sum(1 for photo in photos_raw if photo)
 
         if not os.path.exists(self.template_path):
             raise FileNotFoundError(f"Excel-шаблон не найден: {self.template_path}")
         wb = load_workbook(self.template_path)
-        ws = wb["Товары"] if "Товары" in wb.sheetnames else wb.active
+        ws = self._get_goods_sheet(wb)
+        self._prepare_goods_sheet(ws)
 
         row = 2
         cell = ws.cell
+        inserted_photos_count = 0
         for i, it in enumerate(items, 1):
             title = it.get("title") or "Без названия"
             link = it.get("source_url") or ""
@@ -255,8 +379,18 @@ class ExcelExportService:
                     ext = XDRPositiveSize2D(cx=w_px * 9525, cy=h_px * 9525)
                     anchor = OneCellAnchor(_from=marker, ext=ext)
                     ws.add_image(xl_img, anchor)
+                    inserted_photos_count += 1
 
             row += 1
+
+        logger.info(
+            "Excel 352 export cargo %s: items=%s, photo_ids=%s, downloaded=%s, inserted=%s",
+            cargo_id,
+            len(items),
+            photo_ids_count,
+            downloaded_photos_count,
+            inserted_photos_count,
+        )
 
         today = datetime.now().strftime("%Y%m%d")
         tmpdir = tempfile.gettempdir()
@@ -285,10 +419,10 @@ class ExcelTextFormExportService:
         total_label: str = "Всего",
         yuan_to_rub: Optional[Decimal] = None,
     ) -> None:
-        self.template_path = (
-            template_path
-            or os.getenv("CARGO_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "sadovod.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("SADOVOD_XLSX_TEMPLATE", "TEXT_FORM_XLSX_TEMPLATE"),
+            default_relative=os.path.join("media", "excel", "sadovod.xlsx"),
         )
         if not self.template_path:
             raise ValueError("Не указан template_path и не задан ENV TEXT_FORM_XLSX_TEMPLATE")
@@ -486,10 +620,10 @@ class ExpeditionExportService:
         template_path: Optional[str] = None,
         yuan_to_byn: Optional[Decimal] = None,
     ) -> None:
-        self.template_path = (
-            template_path
-            or os.getenv("EXPEDITION_XLSX_TEMPLATE")
-            or os.path.join("media", "excel", "expedition.xlsx")
+        self.template_path = resolve_template_path(
+            explicit=template_path,
+            env_names=("EXPEDITION_XLSX_TEMPLATE",),
+            default_relative=os.path.join("media", "excel", "expedition.xlsx"),
         )
         env_rate = os.getenv("YUAN_TO_BYN") or "0.34"
         self.yuan_to_byn = (
