@@ -493,6 +493,7 @@ class CargosDB:
             WHERE user_id = ANY($1::bigint[])
               AND cargo_id IS NOT NULL
               AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
             ORDER BY user_id, created_at ASC, cargo_id ASC
             """,
             user_ids,
@@ -985,19 +986,39 @@ class ItemsDB:
 
 
     async def delete(self, *, item_id: int) -> Optional[int]:
-        row = await self.conn.fetchrow("DELETE FROM items WHERE id=$1 RETURNING cargo_id", item_id)
+        row = await self.conn.fetchrow(
+            """
+            UPDATE items
+            SET removed_at = COALESCE(removed_at, NOW()),
+                is_out_of_stock = TRUE,
+                updated_at = NOW()
+            WHERE id=$1
+            RETURNING cargo_id
+            """,
+            item_id,
+        )
         return row['cargo_id'] if row else None
 
 
-    async def get(self, *, item_id: int) -> Optional[dict]:
-        row = await self.conn.fetchrow("SELECT * FROM items WHERE id=$1", item_id)
+    async def get(self, *, item_id: int, include_removed: bool = False) -> Optional[dict]:
+        if include_removed:
+            row = await self.conn.fetchrow("SELECT * FROM items WHERE id=$1", item_id)
+        else:
+            row = await self.conn.fetchrow(
+                """
+                SELECT * FROM items
+                WHERE id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
+                """,
+                item_id,
+            )
         return dict(row) if row else None
 
 
     async def list_by_user(self, *, user_id: int, limit: int = 100, offset: int = 0) -> List[dict]:
         rows = await self.conn.fetch(
             """
-            SELECT * FROM items WHERE user_id=$1
+            SELECT * FROM items
+            WHERE user_id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
             ORDER BY created_at DESC, id DESC
             LIMIT $2 OFFSET $3
             """,
@@ -1007,7 +1028,14 @@ class ItemsDB:
 
 
     async def list_by_cargo(self, *, cargo_id: int) -> List[dict]:
-        rows = await self.conn.fetch("SELECT * FROM items WHERE cargo_id=$1 ORDER BY id", cargo_id)
+        rows = await self.conn.fetch(
+            """
+            SELECT * FROM items
+            WHERE cargo_id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
+            ORDER BY id
+            """,
+            cargo_id,
+        )
         return [dict(r) for r in rows]
     
     async def total_spent_by_user(self, *, user_id: int) -> Decimal:
@@ -1023,7 +1051,10 @@ class ItemsDB:
     
     async def count_by_cargo(self, *, cargo_id: int) -> int:
         return await self.conn.fetchval(
-            "SELECT COUNT(*) FROM items WHERE cargo_id=$1",
+            """
+            SELECT COUNT(*) FROM items
+            WHERE cargo_id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
+            """,
             cargo_id
         )
 
@@ -1031,7 +1062,7 @@ class ItemsDB:
         rows = await self.conn.fetch(
             """
             SELECT * FROM items
-            WHERE cargo_id=$1
+            WHERE cargo_id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
             ORDER BY id DESC
             LIMIT $2 OFFSET $3
             """,
@@ -1041,7 +1072,12 @@ class ItemsDB:
 
     async def count_by_cargo_for_user(self, *, cargo_id: int, user_id: int) -> int:
         return await self.conn.fetchval(
-            "SELECT COUNT(*) FROM items WHERE cargo_id=$1 AND user_id=$2",
+            """
+            SELECT COUNT(*) FROM items
+            WHERE cargo_id=$1 AND user_id=$2
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
+            """,
             cargo_id, user_id
         )
 
@@ -1098,6 +1134,8 @@ class ItemsDB:
             """
             SELECT * FROM items
             WHERE cargo_id=$1 AND user_id=$2
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
             ORDER BY id DESC
             LIMIT $3 OFFSET $4
             """,
@@ -1110,7 +1148,7 @@ class ItemsDB:
         rows = await self.conn.fetch(
             """
             SELECT * FROM items
-            WHERE cargo_id=$1
+            WHERE cargo_id=$1 AND removed_at IS NULL AND is_out_of_stock = FALSE
             ORDER BY id DESC
             LIMIT $2 OFFSET $3
             """,
@@ -1130,6 +1168,8 @@ class ItemsDB:
             LEFT JOIN cargo_types t ON t.id = i.item_type_id
             LEFT JOIN users u ON u.id = i.user_id
             WHERE i.cargo_id=$1
+              AND i.removed_at IS NULL
+              AND i.is_out_of_stock = FALSE
             ORDER BY i.id
             """,
             cargo_id
@@ -1157,6 +1197,8 @@ class ItemsDB:
             SELECT COALESCE(SUM(price * quantity), 0)
             FROM items
             WHERE cargo_id=$1 AND user_id=$2
+              AND removed_at IS NULL
+              AND is_out_of_stock = FALSE
             """,
             cargo_id, user_id
         )
@@ -1197,7 +1239,7 @@ class CargoService:
         await self.pay.init()
 
     async def recalculate_referrals(self, *, cargo_id: int | None = None, user_id: int | None = None) -> dict:
-        where = ["i.cargo_id IS NOT NULL", "i.removed_at IS NULL"]
+        where = ["i.cargo_id IS NOT NULL", "i.removed_at IS NULL", "i.is_out_of_stock = FALSE"]
         args: list[int] = []
         if cargo_id is not None:
             args.append(int(cargo_id))

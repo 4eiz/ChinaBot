@@ -56,7 +56,7 @@ Historical names are kept for compatibility with the existing code.
 |---|---:|---|
 | `DB_NAME` | yes | PostgreSQL user name, not database name. |
 | `DB_PASSWORD` | yes | PostgreSQL password. |
-| `DB_IP` | yes | PostgreSQL host. In Docker: `db`. |
+| `DB_IP` | yes | PostgreSQL host. Use `db` for the compose PostgreSQL container, or your external PostgreSQL IP/DNS. |
 | `DB_PORT` | yes | PostgreSQL port. |
 | `DB_NAME_DATABASE` | yes | PostgreSQL database name. |
 
