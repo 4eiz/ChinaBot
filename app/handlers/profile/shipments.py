@@ -4,6 +4,7 @@ from typing import Dict
 from decimal import Decimal
 
 from aiogram import Router, types, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, FSInputFile
 
@@ -464,9 +465,13 @@ class ShipmentsHandler:
         kb = ShipmentsKB.item_view(cargo_id=cargo_id, item_id=item_id, can_edit=can_edit)
 
         if item.get("photo_file_id"):
-            await call.message.answer_photo(photo=item["photo_file_id"], caption=text, reply_markup=kb)
-        else:
-            await call.message.answer(text=text, reply_markup=kb)
+            try:
+                await call.message.answer_photo(photo=item["photo_file_id"], caption=text, reply_markup=kb)
+                return
+            except TelegramBadRequest:
+                pass
+
+        await call.message.answer(text=text, reply_markup=kb)
 
 
     async def delete_item(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
