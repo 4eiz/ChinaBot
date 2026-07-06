@@ -73,11 +73,39 @@ class SiteOutboxPoller:
                 raise RuntimeError(f"outbox ack failed: {resp.status} {text}")
 
     async def handle_event(self, event: dict[str, Any]):
+        if event.get("event_type") == "profile.cargo_route_status_changed":
+            await self.handle_cargo_route_status_changed(event)
+            return
+
         if not self.admin_chat_id:
             return
         text = self.format_event(event)
         if text:
             await self.bot.send_message(chat_id=self.admin_chat_id, text=text, parse_mode="HTML")
+
+    async def handle_cargo_route_status_changed(self, event: dict[str, Any]):
+        user_id = event.get("user_id")
+        if not user_id:
+            logger.warning("Cargo route event %s has no user_id.", event.get("id"))
+            return
+
+        text = self.format_cargo_route_status_changed(event)
+        if text:
+            await self.bot.send_message(chat_id=user_id, text=text, parse_mode="HTML")
+
+        if self.admin_chat_id:
+            payload = event.get("payload") or {}
+            label = payload.get("route_status_label") or payload.get("route_status") or "—"
+            await self.bot.send_message(
+                chat_id=self.admin_chat_id,
+                text=(
+                    "🚚 <b>Клиенту отправлено уведомление по маршруту</b>\n"
+                    f"{self.user_line({}, user_id)}\n"
+                    f"{self.cargo_line(payload, event.get('cargo_id'))}\n"
+                    f"Статус: <b>{self.esc(label)}</b>"
+                ),
+                parse_mode="HTML",
+            )
 
     def format_event(self, event: dict[str, Any]) -> str:
         event_type = event.get("event_type") or "profile.event"
@@ -115,6 +143,14 @@ class SiteOutboxPoller:
             return f"📦 <b>Личная посылка создана на сайте</b>\n{user_line}\n{cargo_line}"
         if event_type == "profile.cargo_updated":
             return f"✏️ <b>Посылка обновлена на сайте</b>\n{user_line}\n{cargo_line}"
+        if event_type == "profile.cargo_route_status_changed":
+            payload = event.get("payload") or {}
+            label = payload.get("route_status_label") or payload.get("route_status") or "—"
+            return (
+                "🚚 <b>Статус маршрута изменён</b>\n"
+                f"{user_line}\n{self.cargo_line(payload, event.get('cargo_id'))}\n"
+                f"Статус: <b>{self.esc(label)}</b>"
+            )
         if event_type == "profile.user_updated":
             return f"👤 <b>Профиль обновлён на сайте</b>\n{user_line}"
         if event_type == "profile.media_uploaded":
@@ -124,6 +160,36 @@ class SiteOutboxPoller:
                 f"Файл: <code>{self.esc(media.get('original_name') or media.get('photo_file_id') or '')}</code>"
             )
         return f"🔔 <b>Событие сайта</b>: <code>{self.esc(event_type)}</code>\n{user_line}"
+
+    def format_cargo_route_status_changed(self, event: dict[str, Any]) -> str:
+        payload = event.get("payload") or {}
+        cargo_id = payload.get("cargo_id") or event.get("cargo_id") or "?"
+        title = payload.get("title") or "Посылка"
+        status = payload.get("route_status") or ""
+        label = payload.get("route_status_label") or status or "—"
+        delivery_total = payload.get("delivery_total_usd") or "0.00"
+        net_due = payload.get("net_due_usd")
+
+        if status == "ready_pickup":
+            lines = [
+                "✅ <b>Товар можно забирать</b>",
+                "",
+                f"📦 <b>#{self.esc(cargo_id)} {self.esc(title)}</b>",
+                f"🚚 Статус: <b>{self.esc(label)}</b>",
+                "",
+                f"К оплате за доставку, упаковку и страховку: <b>${self.esc(delivery_total)}</b>",
+            ]
+            if net_due is not None:
+                lines.append(f"Итоговый остаток по посылке: <code>${self.esc(net_due)}</code>")
+            lines.append("")
+            lines.append("После оплаты доставки можно закрывать получение.")
+            return "\n".join(lines)
+
+        return (
+            "🚚 <b>Статус посылки обновлён</b>\n\n"
+            f"📦 <b>#{self.esc(cargo_id)} {self.esc(title)}</b>\n"
+            f"Новый статус: <b>{self.esc(label)}</b>"
+        )
 
     def user_line(self, user: dict[str, Any], fallback_id: Any) -> str:
         user_id = user.get("user_id") or fallback_id or "?"
