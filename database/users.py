@@ -145,9 +145,35 @@ class UsersDB:
         ALTER TABLE referral_transactions
         ADD COLUMN IF NOT EXISTS cargo_id BIGINT NULL;
 
+        ALTER TABLE user_referrals
+        ADD COLUMN IF NOT EXISTS tenant_id BIGINT NULL;
+
+        ALTER TABLE referral_transactions
+        ADD COLUMN IF NOT EXISTS tenant_id BIGINT NULL;
+
         CREATE INDEX IF NOT EXISTS referral_transactions_cargo_idx
         ON referral_transactions(cargo_id);
+
+        CREATE INDEX IF NOT EXISTS user_referrals_tenant_idx
+        ON user_referrals(tenant_id);
+
+        CREATE INDEX IF NOT EXISTS referral_transactions_tenant_idx
+        ON referral_transactions(tenant_id);
         """)
+
+    async def _default_tenant_id(self) -> int | None:
+        try:
+            tenant_id = await self.conn.fetchval("""
+            SELECT id
+            FROM tenants
+            ORDER BY
+              CASE WHEN slug = 'robcargo' THEN 0 ELSE 1 END,
+              id ASC
+            LIMIT 1
+            """)
+            return int(tenant_id) if tenant_id is not None else None
+        except Exception:
+            return None
 
     # ----------------------------- Основная логика -----------------------------
 
@@ -276,13 +302,14 @@ class UsersDB:
             return False
 
         await self._create_referral_tables_if_not_exists()
+        tenant_id = await self._default_tenant_id()
         result = await self.conn.execute("""
-        INSERT INTO user_referrals (referrer_id, invited_id, source, note)
-        SELECT $1, $2, $3, $4
-        WHERE EXISTS (SELECT 1 FROM users WHERE id = $1)
-          AND EXISTS (SELECT 1 FROM users WHERE id = $2)
+        INSERT INTO user_referrals (tenant_id, referrer_id, invited_id, source, note)
+        SELECT $1, $2, $3, $4, $5
+        WHERE EXISTS (SELECT 1 FROM users WHERE id = $2)
+          AND EXISTS (SELECT 1 FROM users WHERE id = $3)
         ON CONFLICT (invited_id) DO NOTHING
-        """, int(referrer_id), int(invited_id), source, note)
+        """, tenant_id, int(referrer_id), int(invited_id), source, note)
         return result.endswith("1")
 
     async def get_referral_overview(self, user_id: int) -> dict:

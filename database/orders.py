@@ -479,8 +479,20 @@ class CargosDB:
         ALTER TABLE referral_transactions
         ADD COLUMN IF NOT EXISTS cargo_id BIGINT NULL;
 
+        ALTER TABLE user_referrals
+        ADD COLUMN IF NOT EXISTS tenant_id BIGINT NULL;
+
+        ALTER TABLE referral_transactions
+        ADD COLUMN IF NOT EXISTS tenant_id BIGINT NULL;
+
         CREATE INDEX IF NOT EXISTS referral_transactions_cargo_idx
         ON referral_transactions(cargo_id);
+
+        CREATE INDEX IF NOT EXISTS user_referrals_tenant_idx
+        ON user_referrals(tenant_id);
+
+        CREATE INDEX IF NOT EXISTS referral_transactions_tenant_idx
+        ON referral_transactions(tenant_id);
         """)
 
     async def _first_referral_cargo_ids(self, user_ids: list[int]) -> dict[int, int]:
@@ -526,7 +538,7 @@ class CargosDB:
 
         referrals = await self.conn.fetch(
             """
-            SELECT id, referrer_id, invited_id
+            SELECT id, tenant_id, referrer_id, invited_id
             FROM user_referrals
             WHERE invited_id = ANY($1::bigint[])
             """,
@@ -570,10 +582,11 @@ class CargosDB:
 
             transaction_id = await self.conn.fetchval(
                 """
-                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
-                VALUES ($1, $2, $3, 'discount', $4, $5)
+                INSERT INTO referral_transactions(tenant_id, referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, $4, 'discount', $5, $6)
                 RETURNING id
                 """,
+                referral['tenant_id'],
                 referral['id'],
                 cargo_id,
                 invited_id,
@@ -612,7 +625,7 @@ class CargosDB:
 
         referrals = await self.conn.fetch(
             """
-            SELECT id, referrer_id, invited_id
+            SELECT id, tenant_id, referrer_id, invited_id
             FROM user_referrals
             WHERE invited_id = ANY($1::bigint[])
             """,
@@ -645,10 +658,11 @@ class CargosDB:
                 continue
             transaction_id = await self.conn.fetchval(
                 """
-                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
-                VALUES ($1, $2, $3, 'earned', $4, $5)
+                INSERT INTO referral_transactions(tenant_id, referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, $4, 'earned', $5, $6)
                 RETURNING id
                 """,
+                referral['tenant_id'],
                 referral['id'],
                 cargo_id,
                 referral['referrer_id'],
@@ -748,7 +762,7 @@ class CargosDB:
 
         referrals = await self.conn.fetch(
             """
-            SELECT id, referrer_id, invited_id
+            SELECT id, tenant_id, referrer_id, invited_id
             FROM user_referrals
             WHERE invited_id = ANY($1::bigint[])
             """,
@@ -788,10 +802,11 @@ class CargosDB:
                 continue
             transaction_id = await self.conn.fetchval(
                 """
-                INSERT INTO referral_transactions(referral_id, cargo_id, user_id, kind, amount_usd, note)
-                VALUES ($1, $2, $3, 'earned', $4, $5)
+                INSERT INTO referral_transactions(tenant_id, referral_id, cargo_id, user_id, kind, amount_usd, note)
+                VALUES ($1, $2, $3, $4, 'earned', $5, $6)
                 RETURNING id
                 """,
+                referral['tenant_id'],
                 referral['id'],
                 cargo_id,
                 referral['referrer_id'],
