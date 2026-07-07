@@ -135,7 +135,15 @@ class FormServerHandler:
         """
         name = data.get("full_name") or data.get("name") or ""
         surname = data.get("surname") or ""
-        phone = data.get("phone") or ""
+        phone = (
+            data.get("phone")
+            or data.get("phone_number")
+            or data.get("contact")
+            or data.get("mobile")
+            or ""
+        )
+        if isinstance(phone, dict):
+            phone = phone.get("phone_number") or phone.get("phone") or ""
         source = data.get("source") or ""
 
         # Можно добавить другие поля, если есть (balance, rate и т.п.)

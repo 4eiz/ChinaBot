@@ -160,21 +160,28 @@ class UsersDB:
         try:
             if 'phone_number' in kwargs:
                 kwargs['phone_number'] = self._normalize_phone(kwargs.get('phone_number'))
+            kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if key == 'id' or value not in (None, '')
+            }
             if 'rate' not in kwargs or kwargs.get('rate') in (None, ''):
                 kwargs['rate'] = await self.get_default_rate()
 
             fields = [k for k in kwargs.keys() if k in self.REQUIRED_COLUMNS]
             values = [kwargs[k] for k in fields]
+            if 'id' not in fields:
+                raise ValueError("id is required")
 
             fields_sql = ", ".join(fields)
             placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
             updates = ", ".join(f"{field} = EXCLUDED.{field}" for field in fields if field != "id")
 
+            conflict_clause = f"DO UPDATE SET {updates}" if updates else "DO NOTHING"
             query = f"""
             INSERT INTO users ({fields_sql})
             VALUES ({placeholders})
-            ON CONFLICT (id) DO UPDATE SET
-                {updates}
+            ON CONFLICT (id) {conflict_clause}
             """
 
             await self.conn.execute(query, *values)
