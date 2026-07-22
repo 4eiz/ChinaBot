@@ -1,4 +1,5 @@
 from io import BytesIO
+import logging
 import os, tempfile
 from typing import Dict
 from decimal import Decimal
@@ -16,6 +17,8 @@ from app.handlers.services.admin_notifier import AdminNotifier
 from config import bot, ADMIN_CHAT_ID, DEFAULT_RATE
 from media.photos import PhotoBank
 
+
+logger = logging.getLogger(__name__)
 
 
 class ShipmentsHandler:
@@ -355,6 +358,28 @@ class ShipmentsHandler:
         await call.message.answer_document(document=FSInputFile(file_path), caption=text)
 
 
+    async def _load_item_photo_bytes(self, *, bot, file_id: str | None) -> bytes | None:
+        if not file_id:
+            return None
+        try:
+            row = await self.cargo_service.conn.fetchrow(
+                "SELECT content FROM profile_uploaded_media WHERE token = $1",
+                file_id,
+            )
+            if row and row.get("content"):
+                return bytes(row["content"])
+        except Exception as exc:
+            logger.debug("Profile media lookup skipped for item photo: %s", exc)
+
+        try:
+            file = await bot.get_file(file_id)
+            buf = BytesIO()
+            await bot.download_file(file.file_path, buf)
+            return buf.getvalue()
+        except Exception as exc:
+            logger.warning("Failed to load item photo %s: %s", file_id, exc)
+            return None
+
     async def _collect_item_photos(self, *, bot, items: list[dict]) -> Dict[int, bytes]:
         """
         Возвращает {item_id: image_bytes} для тех, где есть photo_file_id.
@@ -364,14 +389,9 @@ class ShipmentsHandler:
             file_id = it.get("photo_file_id")
             if not file_id:
                 continue
-            try:
-                file = await bot.get_file(file_id)  # aiogram 3.x
-                buf = BytesIO()
-                await bot.download_file(file.file_path, buf)
-                result[it["id"]] = buf.getvalue()
-            except Exception:
-                # пропускаем, если файл не доступен
-                pass
+            photo = await self._load_item_photo_bytes(bot=bot, file_id=file_id)
+            if photo:
+                result[it["id"]] = photo
         return result
 
 
@@ -463,10 +483,18 @@ class ShipmentsHandler:
 
         kb = ShipmentsKB.item_view(cargo_id=cargo_id, item_id=item_id, can_edit=can_edit)
 
-        if item.get("photo_file_id"):
-            await call.message.answer_photo(photo=item["photo_file_id"], caption=text, reply_markup=kb)
-        else:
-            await call.message.answer(text=text, reply_markup=kb)
+        photo_file_id = item.get("photo_file_id")
+        if photo_file_id:
+            photo_bytes = await self._load_item_photo_bytes(bot=call.bot, file_id=photo_file_id)
+            if photo_bytes:
+                photo = BufferedInputFile(photo_bytes, filename=f"item_{item_id}.jpg")
+                try:
+                    await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+                    return
+                except Exception as exc:
+                    logger.warning("Failed to send item photo %s: %s", photo_file_id, exc)
+
+        await call.message.answer(text=text, reply_markup=kb)
 
 
     async def delete_item(self, call: types.CallbackQuery, callback_data: ShipmentFlowCallback):
