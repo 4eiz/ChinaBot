@@ -9,6 +9,8 @@ from .users import UsersDB
 
 from config import BOT_TENANT_SLUG, CLEAR_RATE, DEFAULT_RATE
 
+MIXED_CARGO_TYPE_CODE = 'mixed'
+
 
 async def get_bot_tenant_id(conn: asyncpg.Connection) -> int:
     tenant_id = await conn.fetchval(
@@ -1325,7 +1327,7 @@ class CargoService:
         weight_kg: Any = 0,
         cn_domestic_shipping: Any = 0,
     ) -> asyncpg.Record:
-        item_type_id = await self._resolve_item_type_id(item_type_code)
+        item_type_id = await self._resolve_item_type_id(MIXED_CARGO_TYPE_CODE)
         cargo = await self.cargos.find_or_create_open_shared(cargo_type_id=item_type_id)
         cargo_id = int(cargo['id'])
 
@@ -1369,9 +1371,12 @@ class CargoService:
         weight_kg: Any = 0,
         cn_domestic_shipping: Any = 0,
     ) -> asyncpg.Record:
-        item_type_id = await self._resolve_item_type_id(item_type_code)
-        if item_type_code == "mixed" and not confirm_mixed:
-            raise ValueError("Для смешанного типа нужно подтверждение (confirm_mixed=True).")
+        item_type_id = await self._resolve_item_type_id(MIXED_CARGO_TYPE_CODE)
+        cargo = await self.cargos.get(cargo_id=int(cargo_id))
+        if not cargo:
+            raise ValueError("Посылка не найдена.")
+        if cargo['cargo_type_id'] != item_type_id:
+            await self.cargos.set_cargo_type(cargo_id=int(cargo_id), cargo_type_id=item_type_id)
 
         item_data = {
             "title": title,
