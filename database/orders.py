@@ -7,7 +7,17 @@ from decimal import Decimal, ROUND_UP, ROUND_HALF_UP
 from collections import defaultdict
 from .users import UsersDB
 
-from config import CLEAR_RATE, DEFAULT_RATE
+from config import BOT_TENANT_SLUG, CLEAR_RATE, DEFAULT_RATE
+
+
+async def get_bot_tenant_id(conn: asyncpg.Connection) -> int:
+    tenant_id = await conn.fetchval(
+        "SELECT id FROM tenants WHERE slug = $1",
+        BOT_TENANT_SLUG,
+    )
+    if tenant_id is None:
+        raise RuntimeError(f"Tenant with slug '{BOT_TENANT_SLUG}' was not found")
+    return int(tenant_id)
 
 
 # --------------------------- Cargo Types ---------------------------
@@ -123,12 +133,13 @@ class CargosDB:
     async def create(self, *, scope: str, cargo_type_id: int,
                      owner_user_id: Optional[int] = None,
                      title: Optional[str] = None) -> dict:
+        tenant_id = await get_bot_tenant_id(self.conn)
         row = await self.conn.fetchrow(
             """
-            INSERT INTO cargos(scope, owner_user_id, cargo_type_id, title)
-            VALUES ($1, $2, $3, $4) RETURNING *
+            INSERT INTO cargos(tenant_id, scope, owner_user_id, cargo_type_id, title)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
             """,
-            scope, owner_user_id, cargo_type_id, title
+            tenant_id, scope, owner_user_id, cargo_type_id, title
         )
         return dict(row)
 
@@ -137,26 +148,28 @@ class CargosDB:
         return dict(row) if row else None
 
     async def find_or_create_open_shared(self, *, cargo_type_id: int) -> dict:
+        tenant_id = await get_bot_tenant_id(self.conn)
         row = await self.conn.fetchrow(
             """
             SELECT * FROM cargos
-            WHERE scope='shared' AND status='open' AND cargo_type_id=$1
+            WHERE tenant_id=$1 AND scope='shared' AND status='open' AND cargo_type_id=$2
             LIMIT 1
             """,
-            cargo_type_id
+            tenant_id, cargo_type_id
         )
         if row:
             return dict(row)
         return await self.create(scope='shared', cargo_type_id=cargo_type_id)
 
     async def find_or_create_open_personal(self, *, user_id: int, cargo_type_id: int) -> dict:
+        tenant_id = await get_bot_tenant_id(self.conn)
         row = await self.conn.fetchrow(
             """
             SELECT * FROM cargos
-            WHERE scope='personal' AND status='open' AND owner_user_id=$1 AND cargo_type_id=$2
+            WHERE tenant_id=$1 AND scope='personal' AND status='open' AND owner_user_id=$2 AND cargo_type_id=$3
             LIMIT 1
             """,
-            user_id, cargo_type_id
+            tenant_id, user_id, cargo_type_id
         )
         if row:
             return dict(row)
@@ -911,17 +924,18 @@ class ItemsDB:
         source_url: Optional[str],
         extra: Optional[Dict[str, Any]] = None,   # ← dict
     ) -> asyncpg.Record:
+        tenant_id = await get_bot_tenant_id(self.conn)
         sql = """
         INSERT INTO items (
-            cargo_id, user_id, item_type_id, title, photo_file_id, price, quantity,
+            tenant_id, cargo_id, user_id, item_type_id, title, photo_file_id, price, quantity,
             weight_kg, cn_domestic_shipping, color, size, source_url, extra
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
         RETURNING *;
         """
         return await self.conn.fetchrow(
             sql,
-            cargo_id, user_id, item_type_id, title, photo_file_id, price, quantity,
+            tenant_id, cargo_id, user_id, item_type_id, title, photo_file_id, price, quantity,
             weight_kg, cn_domestic_shipping, color, size, source_url,
             extra or {},  # ← dict, кодек сам сериализует
         )
@@ -1963,12 +1977,13 @@ class CargoPaymentsDB:
         amount_cny: Optional[Decimal] = None,
         note: Optional[str] = None
     ) -> dict:
+        tenant_id = await get_bot_tenant_id(self.conn)
         row = await self.conn.fetchrow(
             """
-            INSERT INTO cargo_payments(cargo_id, user_id, kind, amount_usd, amount_cny, note)
-            VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
+            INSERT INTO cargo_payments(tenant_id, cargo_id, user_id, kind, amount_usd, amount_cny, note)
+            VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
             """,
-            cargo_id, user_id, kind, amount_usd, amount_cny, note
+            tenant_id, cargo_id, user_id, kind, amount_usd, amount_cny, note
         )
         return dict(row)
 

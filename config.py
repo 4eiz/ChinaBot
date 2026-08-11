@@ -22,6 +22,7 @@ DB_PASSWORD = os.getenv('DB_PASSWORD')
 DB_IP = os.getenv('DB_IP')
 DB_PORT = os.getenv('DB_PORT')
 DB_NAME_DATABASE = os.getenv('DB_NAME_DATABASE')
+BOT_TENANT_SLUG = os.getenv('BOT_TENANT_SLUG', 'robcargo').strip()
 DSN = f"postgresql://{DB_NAME}:{DB_PASSWORD}@{DB_IP}:{DB_PORT}/{DB_NAME_DATABASE}"
 
 
