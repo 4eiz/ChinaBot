@@ -11,6 +11,7 @@ from aiogram.types import ErrorEvent
 import config
 from app.handlers.services.site_outbox import SiteOutboxPoller
 from app.routers import get_routers
+from app.utils.expired_message import ExpiredMessageMiddleware
 from database import CargoService, UsersDB
 
 
@@ -84,6 +85,7 @@ async def start():
 
     dp = Dispatcher()
     dp.errors.register(on_aiogram_error)
+    dp.update.outer_middleware(ExpiredMessageMiddleware())
 
     logger.info("Подключаемся к БД...")
     await config.connect_db()

@@ -15,11 +15,9 @@ async def safe_delete(message: types.Message) -> None:
     """
     Пытается удалить сообщение.
 
-    Если удаление невозможно (сообщение старше 48 ч, уже удалено,
-    нет прав, flood wait и т.д.) — тихо пропускает ошибку.
-
-    Бот ВСЕГДА продолжает выполнение и отправляет следующее сообщение
-    — независимо от результата удаления.
+    Ошибки Bad Request передаются обработчику обновления: при старом
+    или удалённом сообщении он отправляет главное меню.
+    Отсутствие доступа к чату пропускается.
 
     Использование:
         from app.utils import safe_delete
@@ -29,7 +27,9 @@ async def safe_delete(message: types.Message) -> None:
     """
     try:
         await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError):
+    except TelegramBadRequest:
+        raise
+    except TelegramForbiddenError:
         pass
     except Exception as exc:
         logger.debug(
